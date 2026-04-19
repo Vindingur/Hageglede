@@ -61,6 +61,102 @@ Hageglede is a gardening web application that helps users discover plants suitab
 - Plant database with attributes (from datasources.md research)
 - Plant images (external CDN or local storage)
 
+## Data Pipeline
+
+### Overview
+The Hageglede data pipeline is responsible for fetching, transforming, and loading plant and climate data into the SQLite database that powers the runtime API. This separation ensures that the runtime system serves a pre-built, optimized database read-only, while data updates are handled through a separate pipeline process.
+
+### Architecture Separation
+- **Runtime API**: FastAPI application that serves the pre-built SQLite database read-only
+- **Data Pipeline**: Standalone scripts that fetch, transform, and load data into the database
+- **External Scripts**: Located in the `scripts/` directory, separate from the main application code
+
+### Scripts Directory Structure
+```
+scripts/
+├── fetch_data.py          # Fetches raw data from external sources
+├── transform_data.py      # Transforms raw data into database-ready format
+├── load_data.py           # Loads transformed data into SQLite database
+├── seed_database.py       # Main entry point that orchestrates fetch→transform→load
+├── init_db.py             # Initializes database schema (creates tables)
+└── validate_data.py       # Validates data integrity after loading
+```
+
+### Seeding Workflow
+The database seeding follows a consistent fetch → transform → load → commit workflow:
+
+1. **Fetch Phase** (`fetch_data.py`):
+   - Downloads plant data from external APIs (Wikidata, GBIF, etc.)
+   - Fetches climate zone mapping data
+   - Retrieves plant images from Wikimedia Commons
+   - Stores raw data in temporary JSON/CSV files
+
+2. **Transform Phase** (`transform_data.py`):
+   - Cleans and normalizes raw data
+   - Maps external IDs to internal schema
+   - Converts temperature ranges to appropriate units
+   - Extracts and formats planting/harvest months
+   - Creates relationship mappings between plants and climate zones
+
+3. **Load Phase** (`load_data.py`):
+   - Drops and recreates tables (for full refresh) or updates existing records
+   - Loads transformed data into SQLite database
+   - Creates indexes for performance optimization
+   - Validates foreign key relationships
+
+4. **Commit Phase**:
+   - Verifies data integrity and completeness
+   - Creates database backup before replacement
+   - Atomically swaps the old database with the new one
+   - Updates version metadata
+
+### Pipeline Execution
+```bash
+# Full database refresh
+python scripts/seed_database.py --refresh
+
+# Incremental update (if supported by data sources)
+python scripts/seed_database.py --incremental
+
+# Dry run (validate without committing)
+python scripts/seed_database.py --dry-run
+
+# Seed with sample data for development
+python scripts/seed_database.py --sample
+```
+
+### Runtime Considerations
+- The pipeline can be run manually, scheduled via cron, or triggered by webhook
+- During pipeline execution, the runtime API continues to serve the previous database version
+- Database swap is atomic to prevent partial updates
+- Version metadata tracks when and from what sources data was loaded
+
+### Data Sources Integration
+Each data source has its own adapter in the pipeline:
+- **Wikidata/DBpedia**: For plant taxonomy and descriptions
+- **GBIF**: For geographical distribution data
+- **NOAA/Climate APIs**: For climate zone boundaries
+- **Norwegian Post Registry**: For postcode to municipality mapping
+- **Wikimedia Commons**: For plant images
+
+### Data Freshness
+- **Static Data**: Climate zones, postcode mappings (updated quarterly)
+- **Dynamic Data**: Plant availability, seasonal recommendations (updated monthly)
+- **Images**: Cached indefinitely with fallback to placeholder
+
+### Error Handling
+- Pipeline scripts include comprehensive logging
+- Failed steps can be retried independently
+- Data validation ensures only clean data reaches production
+- Email notifications for pipeline failures
+
+### Development vs Production
+- **Development**: Uses sample data for faster iteration
+- **Production**: Uses full datasets with proper error handling
+- **Testing**: Pipeline includes unit tests for transformation logic
+
+This pipeline architecture ensures that data management is separated from application runtime, allowing for reliable updates without disrupting the user-facing API.
+
 ## Database Schema Design
 
 ### SQLite Database: `gardening.db`

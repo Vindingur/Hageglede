@@ -1,127 +1,68 @@
-# Hageglede Prototype Status
+# Prototype Status
 
-## Current Phase: Research → Planning
-We are transitioning from the initial research phase into detailed planning and design.
+## Current Phase
+**Planning Complete / Architecture Approved**
 
-## Completed Items
+## Progress Summary
+- ✅ Project requirements defined (see `requirements.md`)
+- ✅ Architecture designed and approved (see `ARCHITECTURE.md`)
+- ✅ Tech stack selected: FastAPI + SQLite + HTMX
+- ✅ Roadmap updated for backend-first MVP (see `roadmap.md`)
+- ✅ Phase 1 scope defined and ready for implementation
 
-### Phase 1: Research (Completed)
-- ✅ **Datasources Research**: Comprehensive investigation of available gardening and geospatial data sources
-  - Oslo Kommune open data APIs
-  - Geonorge datasets
-  - Plant databases and horticultural resources
-  - Weather and climate data sources
-- ✅ **Architecture Design**: High-level system architecture defined
-  - Documented in ARCHITECTURE.md
-  - Outlined data flow and component interactions
-  - Defined key system boundaries and interfaces
+## Next Steps
+- Begin Phase 1 implementation:
+  1. Set up FastAPI project structure
+  2. Implement SQLite database with plant data schema
+  3. Create plant recommendation API endpoint
+  4. Build basic HTMX frontend for recommendations
+  5. Deploy initial MVP
 
-### Phase 2: Planning (In Progress)
-- 🔄 **Project Roadmap**: Initial timeline and milestones established
-  - Documented in roadmap.md
-  - Identified key deliverables and dependencies
-  - Estimated effort for core components
+## Key Decisions
+1. **Backend-first approach**: Using FastAPI instead of static site generator
+2. **Database**: SQLite for simplicity and local development
+3. **Frontend**: HTMX for server-rendered dynamic pages without complex JavaScript
+4. **Deployment**: Render/Railway compatible architecture
+5. **Testing**: Pytest for backend, htmx-driven frontend testing
 
-## Upcoming Work
+## Repository Structure
+```
+├── app/
+│   ├── main.py              # FastAPI application
+│   ├── database.py          # SQLite connection & models
+│   ├── routes/
+│   │   └── plants.py        # Plant recommendation endpoint
+│   └── templates/
+│       └── index.html       # HTMX frontend
+├── tests/
+│   └── test_recommendations.py
+├── requirements.txt
+├── roadmap.md
+├── ARCHITECTURE.md
+├── PROTOTYPE_STATUS.md
+└── README.md
+```
 
-### Immediate Next Steps (Priority 1)
-1. **Database Schema Design**
-   - Define core tables and relationships
-   - Design data models for plants, users, and garden zones
-   - Specify indexing and optimization strategies
+## Timeline
+- **Phase 1 (Current)**: Backend MVP (2-3 weeks)
+- **Phase 2**: Interactive UI & data collection (2-3 weeks)
+- **Phase 3**: Advanced features & optimization (3-4 weeks)
+- **Phase 4**: Production readiness (2 weeks)
 
-2. **Postcode → Zone Mapping System**
-   - Create algorithm for mapping postal codes to gardening zones
-   - Implement zone classification based on microclimate factors
-   - Design data ingestion pipeline for zone boundary data
+## Technical Constraints
+- Minimal external dependencies
+- Zero external API calls for core functionality
+- Mobile-first responsive design
+- Accessible WCAG 2.1 AA compliant
+- Performance: < 100ms response time for recommendations
+- Deployment: Single-container deployment ready
 
-3. **Plant Data Model**
-   - Define comprehensive plant taxonomy and attributes
-   - Design seasonal data structures (planting times, harvest windows)
-   - Create compatibility rules for companion planting
+## Blockers
+None - Ready to begin implementation.
 
-### Medium-term Tasks (Priority 2)
-4. **API Design & Specification**
-   - RESTful endpoint definitions
-   - Request/response schemas
-   - Authentication and authorization flows
-
-5. **User Profile System**
-   - Garden characteristics capture
-   - User preferences and constraints
-   - Historical planting data structure
-
-6. **Recommendation Engine Foundation**
-   - Basic recommendation algorithms
-   - Scoring mechanisms
-   - Personalization rules
-
-## Technical Decisions Pending Review
-
-### Database Technology
-- **Options**: PostgreSQL with PostGIS vs. SQLite with spatial extensions
-- **Considerations**: Deployment complexity, spatial query performance, maintenance overhead
-
-### API Framework
-- **Options**: FastAPI vs. Flask
-- **Considerations**: Development speed, async support, documentation generation
-
-### Frontend Approach
-- **Options**: Progressive Web App vs. Traditional Web App vs. Mobile-first
-- **Considerations**: Offline capability, user engagement patterns, development resources
-
-## Risks & Dependencies
-
-### Identified Risks
-1. **Data Quality**: Reliability and completeness of external gardening data sources
-2. **Zone Accuracy**: Precision of microclimate zone mapping algorithms
-3. **Seasonal Variability**: Accounting for year-to-year climate fluctuations
-
-### External Dependencies
-- Oslo Kommune API stability and rate limits
-- Geonorge dataset update frequency
-- Weather data API reliability
-
-## Success Metrics
-
-### Prototype Phase Goals
-- [ ] Functional postcode-to-zone mapping
-- [ ] Basic plant database with 50+ species
-- [ ] Simple recommendation algorithm
-- [ ] Minimum viable API with 3+ endpoints
-- [ ] Basic web interface for zone lookup
-
-## Timeline Estimates
-
-| Task | Estimated Effort | Dependencies | Target Date |
-|------|------------------|--------------|-------------|
-| Database Schema | 3-5 days | None | Week 1 |
-| Zone Mapping | 5-7 days | Database schema | Week 2 |
-| Plant Data Model | 4-6 days | Database schema | Week 2 |
-| API Foundation | 4-6 days | All data models | Week 3 |
-| Recommendation Engine | 7-10 days | All data models, API | Week 4 |
-
-## Notes & Considerations
-
-### Climate Zone Specificity
-The Oslo region presents unique microclimate challenges due to:
-- Urban heat island effects
-- Fjord proximity influences
-- Altitude variations within the city
-- North-south exposure differences
-
-### Data Freshness Requirements
-- Zone boundaries: Annual updates (climate change adjustment)
-- Plant data: Seasonal updates (new varieties, research findings)
-- Weather data: Real-time to daily updates
-
-### User Experience Priorities
-1. **Accuracy**: Correct zone identification is critical
-2. **Simplicity**: Easy-to-understand recommendations
-3. **Actionability**: Clear, practical gardening advice
-4. **Trust**: Transparent data sources and methodology
+## Notes
+The architecture shift from static site to FastAPI backend enables more sophisticated plant matching algorithms and future scalability while maintaining the simplicity and low-overhead goals of the project.
 
 ---
-*Last Updated: $(date)*  
-*Document Maintainer: Project Team*  
-*Next Review: Upon completion of database schema design*
+
+*Last updated: $(date -I)*

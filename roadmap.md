@@ -24,6 +24,66 @@ This is a complete reset from any previous gardening app project. We start with 
 3. List of concrete user needs (not wants)
 4. First-pass user personas (based on actual people interviewed)
 
+## Phase 0.5: Data Seeding (External Data Pipeline)
+
+**Timeframe:** 1-2 weeks (runs in parallel with final Phase 0 synthesis)
+**Success Metric:** Complete SQLite database with plant, climate zone, and postcode data ready for FastAPI serving
+
+**Purpose:** Pre-populate the SQLite database from external sources before Phase 1 development begins. This creates a read-only data foundation that the FastAPI backend can serve without needing live data connections.
+
+**Function:**
+- Separate Python scripts in a `scripts/` folder that run once locally
+- Each script processes a specific external data source
+- Scripts extract, transform, and load (ETL) data into SQLite tables
+- Resulting `.db` file is committed to the repository for Phase 1 use
+- All scripts are idempotent and can be re-run if needed
+
+**Data Sources:**
+1. **Artsdatabanken** - Norwegian biodiversity database for native plants
+2. **GBIF (Global Biodiversity Information Facility)** - Global plant occurrence data
+3. **MET (Meteorological Institute)** - Norwegian climate zone data
+4. **Wikipedia** - Plant common names and basic information
+5. **Norwegian Post (Posten)** - Postcode to location mappings
+
+**Data Processing Pipeline:**
+1. **Extract:** Download source files (CSV, JSON, API responses)
+2. **Transform:** Clean, normalize, and structure data
+3. **Load:** Insert into SQLite tables following the schema from ARCHITECTURE.md
+4. **Validate:** Run data quality checks and integrity tests
+
+**Scripts Structure:**
+```
+scripts/
+├── 01_download_sources.py    # Download all external data
+├── 02_process_climate_zones.py  # MET climate zone data
+├── 03_process_postcodes.py   # Postcode to zone mappings
+├── 04_process_plants.py      # Artsdatabanken + GBIF plant data
+├── 05_build_mappings.py      # Plant-zone suitability mappings
+├── 06_validate_database.py   # Data quality checks
+└── run_all.py               # Execute entire pipeline
+```
+
+**Database Output:**
+- `hageglede.db` - Complete SQLite database with all tables populated
+- Tables match ARCHITECTURE.md schema:
+  - `climate_zones` - Climate zone definitions
+  - `postcode_zones` - Postcode to climate zone mappings
+  - `plants` - Plant information (scientific name, common names, etc.)
+  - `plant_zone_mapping` - Plant suitability for different zones
+  - `user_saved_plants` - Empty table for Phase 1 session data
+
+**Key Constraints:**
+- No external API calls during Phase 1 runtime
+- All data must be in the SQLite file
+- Database is read-only for the FastAPI application
+- If data needs updating, re-run scripts and commit new `.db` file
+
+**Deliverables:**
+1. Complete `scripts/` folder with documented Python scripts
+2. `hageglede.db` SQLite database with all required data
+3. Data source documentation and attribution
+4. Data quality report showing completeness and accuracy
+
 ## Phase 1: Single Recommendation Works (FastAPI + SQLite + HTMVP)
 
 **Timeframe:** 3-4 weeks after Phase 0 completion
@@ -35,11 +95,11 @@ This is a complete reset from any previous gardening app project. We start with 
 
 **Technical Stack (Updated per ARCHITECTURE.md):**
 - **Backend**: FastAPI with Python 3.11+
-- **Database**: SQLite (single file, zero configuration)
+- **Database**: SQLite (single file, zero configuration) - pre-populated from Phase 0.5
 - **Frontend**: Vanilla HTML/CSS with HTMX for dynamic interactions
 - **Server**: Uvicorn ASGI server
 - **Deployment**: Simple container or process manager (Docker optional)
-- **Data**: Static datasets loaded into SQLite tables
+- **Data**: Static datasets loaded into SQLite tables from Phase 0.5
 
 **Explicit NO List (Updated):**
 - No JavaScript frameworks (React, Vue, etc.)
@@ -54,19 +114,19 @@ This is a complete reset from any previous gardening app project. We start with 
 **Features (Updated per Architecture):**
 1. Single-page form: postcode input + optional garden conditions
 2. Submit button → HTMX calls `/api/climate-zone/{postcode}` endpoint
-3. Backend maps postcode to climate zone using `postcode_zones` table
-4. Backend queries `plant_zone_mapping` and `plants` tables for matching plants
+3. Backend maps postcode to climate zone using `postcode_zones` table (from Phase 0.5)
+4. Backend queries `plant_zone_mapping` and `plants` tables for matching plants (from Phase 0.5)
 5. Returns structured JSON with plant recommendations
 6. Frontend renders plant cards with images, names, and details
 7. User can save plants to localStorage (anonymous session)
-8. All plant data stored in SQLite database with proper schema
+8. All plant data stored in SQLite database with proper schema (from Phase 0.5)
 
 **Database Schema (from ARCHITECTURE.md):**
-- `climate_zones` table with zone codes and temperature ranges
-- `postcode_zones` table mapping Norwegian postcodes to zones
-- `plants` table with scientific names, common names, plant types
-- `plant_zone_mapping` table with suitability scores and seasonal info
-- `user_saved_plants` table for localStorage sync backup
+- `climate_zones` table with zone codes and temperature ranges (populated in Phase 0.5)
+- `postcode_zones` table mapping Norwegian postcodes to zones (populated in Phase 0.5)
+- `plants` table with scientific names, common names, plant types (populated in Phase 0.5)
+- `plant_zone_mapping` table with suitability scores and seasonal info (populated in Phase 0.5)
+- `user_saved_plants` table for localStorage sync backup (empty, filled in Phase 1)
 
 **API Endpoints (Core MVP):**
 - `GET /api/climate-zone/{postcode}` - Get zone for a postcode
@@ -204,10 +264,11 @@ This roadmap has been updated to reflect the architecture defined in ARCHITECTUR
 3. **API-driven**: HTMX frontend calls RESTful endpoints
 4. **Scalable foundation**: Architecture supports future growth to PostgreSQL, React, etc.
 5. **Production-ready patterns**: Proper error handling, validation, documentation
+6. **Data pipeline**: New Phase 0.5 establishes external data seeding before Phase 1 development
 
-The Phase 1 MVP maintains simplicity while establishing a foundation that can scale through Phases 2-4 without major rewrites.
+The Phase 1 MVP maintains simplicity while establishing a foundation that can scale through Phases 2-4 without major rewrites. Phase 0.5 ensures the database is pre-populated with quality data from authoritative sources before any application code is written.
 
 ---
 
 *This document is living. Update after each phase based on evidence, not opinion.*  
-*Last updated: Aligned with ARCHITECTURE.md FastAPI+SQLite+HTMX architecture*
+*Last updated: Added Phase 0.5 (Data Seeding) for external data pipeline*

@@ -24,51 +24,108 @@ This is a complete reset from any previous gardening app project. We start with 
 3. List of concrete user needs (not wants)
 4. First-pass user personas (based on actual people interviewed)
 
-## Phase 1: Single Recommendation Works
+## Phase 1: Single Recommendation Works (FastAPI + SQLite + HTMVP)
 
 **Timeframe:** 3-4 weeks after Phase 0 completion
 **Success Metric:** 5 real users successfully receive accurate plant recommendations and report the recommendations were helpful
 
-**Purpose:** Prove that we can deliver useful plant recommendations using the simplest possible technology.
+**Purpose:** Prove that we can deliver useful plant recommendations using the simplest possible backend technology.
 
 **Core Hypothesis:** "Given a postcode (location) and basic garden conditions, we can recommend 3-5 plants that have a high probability of thriving."
 
-**Technical Stack:**
-- Static HTML site (no build steps)
-- Pico CSS for styling (no custom CSS)
-- HTMX for dynamic interactions (no JavaScript frameworks)
-- SQLite ONLY if absolutely necessary (prefer static CSV files)
-- Deploy via GitHub Pages or similar static hosting
+**Technical Stack (Updated per ARCHITECTURE.md):**
+- **Backend**: FastAPI with Python 3.11+
+- **Database**: SQLite (single file, zero configuration)
+- **Frontend**: Vanilla HTML/CSS with HTMX for dynamic interactions
+- **Server**: Uvicorn ASGI server
+- **Deployment**: Simple container or process manager (Docker optional)
+- **Data**: Static datasets loaded into SQLite tables
 
-**Explicit NO List:**
+**Explicit NO List (Updated):**
 - No JavaScript frameworks (React, Vue, etc.)
-- No build steps (Webpack, Vite, etc.)
-- No OAuth/authentication
-- No database beyond SQLite
-- No real-time features
+- No complex build steps (simple HTML/CSS only)
+- No OAuth/authentication (anonymous sessions only)
+- No database beyond SQLite (no PostgreSQL, no MongoDB)
+- No real-time features beyond basic API calls
 - No ML/AI components
 - No mobile app
+- No user accounts with passwords
 
-**Features:**
-1. Single-page form: postcode + soil type + sunlight hours + space available
-2. Submit button → shows 3-5 plant recommendations with reason why
-3. All plant data stored locally in CSV/JSON file
-4. No user accounts or history
-5. Printable results
+**Features (Updated per Architecture):**
+1. Single-page form: postcode input + optional garden conditions
+2. Submit button → HTMX calls `/api/climate-zone/{postcode}` endpoint
+3. Backend maps postcode to climate zone using `postcode_zones` table
+4. Backend queries `plant_zone_mapping` and `plants` tables for matching plants
+5. Returns structured JSON with plant recommendations
+6. Frontend renders plant cards with images, names, and details
+7. User can save plants to localStorage (anonymous session)
+8. All plant data stored in SQLite database with proper schema
 
-**Outcome:** Working proof-of-concept that delivers value. If successful, we have validated demand for the core service.
+**Database Schema (from ARCHITECTURE.md):**
+- `climate_zones` table with zone codes and temperature ranges
+- `postcode_zones` table mapping Norwegian postcodes to zones
+- `plants` table with scientific names, common names, plant types
+- `plant_zone_mapping` table with suitability scores and seasonal info
+- `user_saved_plants` table for localStorage sync backup
 
-## Phase 2: Add Persistence (if needed)
+**API Endpoints (Core MVP):**
+- `GET /api/climate-zone/{postcode}` - Get zone for a postcode
+- `GET /api/plants/zone/{zone_id}` - Get plants for a zone
+- `POST /api/session` - Create anonymous session
+- `GET /api/health` - Health check
+
+**Outcome:** Working proof-of-concept that delivers value. If successful, we have validated demand for the core service and have a scalable backend foundation.
+
+## Phase 2: Add Persistence & User Features (if needed)
 
 **Timeframe:** TBD based on Phase 1 findings
 **Success Metric:** 20 users save and return to see their recommendations
 
-**Purpose:** Only if Phase 1 users explicitly request saving their recommendations.
+**Purpose:** Only if Phase 1 users explicitly request saving their recommendations or additional features.
 
 **Technical Approach:**
-- Local storage first, then possibly server-side SQLite
-- Email-based magic links (no passwords)
-- Still no OAuth, no user databases with PII
+- Maintain FastAPI + SQLite backbone
+- Add PostgreSQL migration path if concurrent users > 100
+- Email-based magic links for cross-device access (no passwords)
+- Enhanced plant filtering by type, season, sun requirements
+- Planting calendar view based on seasonal data
+- Still no complex authentication, minimal PII collection
+
+**Potential Features:**
+1. Cross-device sync via email magic links
+2. Advanced filtering (plant type, season, difficulty)
+3. Planting/harvest calendar
+4. Companion planting suggestions
+5. Basic garden planning grid
+
+## Phase 3: Enhanced Recommendations & Personalization
+
+**Timeframe:** After Phase 2 validation
+**Success Metric:** 50% of returning users engage with personalized features
+
+**Purpose:** Move beyond basic zone matching to personalized recommendations.
+
+**Technical Approach:**
+- Add user garden profiles (size, soil type, sunlight hours)
+- Implement preference-based ranking
+- Add success tracking (user feedback on recommendations)
+- Possibly: simple ML for preference learning
+- Maintain FastAPI backend, potentially add Redis cache
+
+## Phase 4: Community & Scale
+
+**Timeframe:** After Phase 3 validation
+**Success Metric:** Organic user growth and community engagement
+
+**Purpose:** Build network effects and scale the platform.
+
+**Technical Approach:**
+- React frontend migration if complexity warrants
+- PostgreSQL for production scale
+- User-generated content (tips, photos, success stories)
+- Social features (following expert gardeners)
+- Possibly: native mobile apps via React Native
+- Advanced monitoring and observability
 
 ## Out-of-Scope (Never Build)
 
@@ -76,8 +133,8 @@ These features are explicitly out of scope for this project. If evidence later s
 
 1. **AI Chat Interface** — No conversational AI about gardening
 2. **Predictive Models** — No ML forecasting of plant growth
-3. **Mobile App** — No native iOS/Android apps (web only)
-4. **Social Features** — No sharing, following, user profiles
+3. **Mobile App** — No native iOS/Android apps (web only, Phase 1)
+4. **Social Features** — No sharing, following, user profiles (until Phase 4)
 5. **Marketplace** — No buying/selling plants
 6. **Image Recognition** — No plant identification from photos
 7. **Automated Gardening** — No IoT/sensor integrations
@@ -86,7 +143,7 @@ These features are explicitly out of scope for this project. If evidence later s
 ## Phase 0 Kickoff Checklist
 
 ### Week 1: Preparation
-- [ ] Define target demographic: Home gardeners, UK-based, mixed experience
+- [ ] Define target demographic: Home gardeners, Norway-based, mixed experience
 - [ ] Create interview recruitment message (offer £10 voucher)
 - [ ] Set up Calendly for scheduling
 - [ ] Prepare recording/transcription tools (Otter.ai + backup)
@@ -138,7 +195,19 @@ These features are explicitly out of scope for this project. If evidence later s
 - Unmet needs mentioned
 - Willingness to pay/time investment indicated
 
+## Architecture Alignment Note
+
+This roadmap has been updated to reflect the architecture defined in ARCHITECTURE.md. Key changes from previous static site approach:
+
+1. **Backend-first**: FastAPI + SQLite replaces static site approach
+2. **Proper database**: SQLite with normalized schema instead of CSV/JSON files
+3. **API-driven**: HTMX frontend calls RESTful endpoints
+4. **Scalable foundation**: Architecture supports future growth to PostgreSQL, React, etc.
+5. **Production-ready patterns**: Proper error handling, validation, documentation
+
+The Phase 1 MVP maintains simplicity while establishing a foundation that can scale through Phases 2-4 without major rewrites.
+
 ---
 
-*This document is living. Update after each phase based on evidence, not opinion.*
-*Last updated: Project Start*
+*This document is living. Update after each phase based on evidence, not opinion.*  
+*Last updated: Aligned with ARCHITECTURE.md FastAPI+SQLite+HTMX architecture*

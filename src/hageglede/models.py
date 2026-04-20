@@ -1,149 +1,181 @@
-"""SQLAlchemy ORM models for Hageglede."""
-
-import datetime
-from typing import Optional
+"""
+SQLAlchemy async-compatible models for the Hageglede gardening application.
+All models inherit from declarative_base() and are designed for async SQLAlchemy usage.
+"""
 
 from sqlalchemy import (
-    Boolean,
-    Date,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
+    Column, Integer, String, Text, Float, Boolean, DateTime, 
+    ForeignKey, Table, UniqueConstraint
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.sql import func
 
+Base = declarative_base()
 
-class Base(DeclarativeBase):
-    pass
+# Association table for many-to-many relationship between plants and zones
+plant_zone_association = Table(
+    'plant_zone_association',
+    Base.metadata,
+    Column('plant_id', Integer, ForeignKey('plants.id', ondelete='CASCADE'), primary_key=True),
+    Column('zone_id', Integer, ForeignKey('zones.id', ondelete='CASCADE'), primary_key=True)
+)
 
 
 class Plant(Base):
-    """Plant species or variety."""
+    """Model representing a plant in the system."""
+    __tablename__ = 'plants'
 
-    __tablename__ = "plants"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, index=True)
+    scientific_name = Column(String(200))
+    description = Column(Text)
+    water_needs = Column(String(50))  # e.g., 'low', 'medium', 'high'
+    sun_needs = Column(String(50))    # e.g., 'full_sun', 'partial_shade', 'shade'
+    growth_habit = Column(String(50))  # e.g., 'annual', 'perennial', 'biennial'
+    mature_height_cm = Column(Float)
+    mature_width_cm = Column(Float)
+    sowing_time = Column(String(100))  # e.g., 'spring', 'autumn'
+    harvest_time = Column(String(100)) # e.g., 'summer', 'autumn'
+    difficulty = Column(String(50))    # e.g., 'easy', 'medium', 'hard'
+    image_url = Column(String(500))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    species: Mapped[Optional[str]] = mapped_column(String(100))
-    variety: Mapped[Optional[str]] = mapped_column(String(100))
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    days_to_maturity: Mapped[Optional[int]] = mapped_column(Integer)
-    spacing_cm: Mapped[Optional[int]] = mapped_column(Integer)
-    row_spacing_cm: Mapped[Optional[int]] = mapped_column(Integer)
-    is_perennial: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow
+    # Relationships
+    zones = relationship(
+        'Zone', 
+        secondary=plant_zone_association,
+        back_populates='plants'
     )
+    user_plants = relationship('UserPlant', back_populates='plant', cascade='all, delete-orphan')
 
-    schedules: Mapped[list["PlantingSchedule"]] = relationship(
-        back_populates="plant", cascade="all, delete-orphan"
-    )
-    pests: Mapped[list["Pest"]] = relationship(
-        secondary="plant_pests", back_populates="plants"
-    )
-
-    def __repr__(self) -> str:
-        return f"<Plant(id={self.id}, name='{self.name}')>"
+    def __repr__(self):
+        return f"<Plant(name='{self.name}', id={self.id})>"
 
 
 class Zone(Base):
-    """Garden zone/area with specific characteristics."""
+    """Model representing a hardiness zone (based on postcode)."""
+    __tablename__ = 'zones'
 
-    __tablename__ = "zones"
+    id = Column(Integer, primary_key=True)
+    zone_number = Column(String(10), nullable=False, unique=True, index=True)  # e.g., '7a', '8b'
+    description = Column(Text)
+    min_temperature_c = Column(Float)
+    max_temperature_c = Column(Float)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    area_sqm: Mapped[Optional[float]] = mapped_column(Float)
-    sunlight_hours: Mapped[Optional[int]] = mapped_column(Integer)
-    soil_type: Mapped[Optional[str]] = mapped_column(String(50))
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow
+    # Relationships
+    plants = relationship(
+        'Plant', 
+        secondary=plant_zone_association,
+        back_populates='zones'
     )
+    user_plants = relationship('UserPlant', back_populates='zone', cascade='all, delete-orphan')
 
-    schedules: Mapped[list["PlantingSchedule"]] = relationship(
-        back_populates="zone", cascade="all, delete-orphan"
-    )
-
-    def __repr__(self) -> str:
-        return f"<Zone(id={self.id}, name='{self.name}')>"
+    def __repr__(self):
+        return f"<Zone(zone_number='{self.zone_number}', id={self.id})>"
 
 
-class PlantingSchedule(Base):
-    """Schedule for planting a specific plant in a zone."""
+class UserPlant(Base):
+    """Model representing a user's specific plant instance in their garden."""
+    __tablename__ = 'user_plants'
 
-    __tablename__ = "planting_schedules"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(100), nullable=False, index=True)  # User identifier from auth system
+    plant_id = Column(Integer, ForeignKey('plants.id', ondelete='CASCADE'), nullable=False)
+    zone_id = Column(Integer, ForeignKey('zones.id', ondelete='CASCADE'), nullable=False)
+    nickname = Column(String(100))  # Optional user-given name for the plant
+    planting_date = Column(DateTime(timezone=True))
+    location = Column(String(200))  # e.g., 'backyard', 'balcony', 'kitchen window'
+    notes = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    plant = relationship('Plant', back_populates='user_plants')
+    zone = relationship('Zone', back_populates='user_plants')
+    care_logs = relationship('CareLog', back_populates='user_plant', cascade='all, delete-orphan')
+
     __table_args__ = (
-        UniqueConstraint("plant_id", "zone_id", "year", name="uix_plant_zone_year"),
+        UniqueConstraint('user_id', 'plant_id', 'nickname', name='uix_user_plant_nickname'),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plant_id: Mapped[int] = mapped_column(ForeignKey("plants.id", ondelete="CASCADE"))
-    zone_id: Mapped[int] = mapped_column(ForeignKey("zones.id", ondelete="CASCADE"))
-    year: Mapped[int] = mapped_column(Integer, nullable=False)
-    planned_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
-    actual_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
-    quantity: Mapped[Optional[int]] = mapped_column(Integer)
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow
+    def __repr__(self):
+        return f"<UserPlant(user_id='{self.user_id}', plant_id={self.plant_id}, id={self.id})>"
+
+
+class CareLog(Base):
+    """Model for logging care activities for user plants."""
+    __tablename__ = 'care_logs'
+
+    id = Column(Integer, primary_key=True)
+    user_plant_id = Column(Integer, ForeignKey('user_plants.id', ondelete='CASCADE'), nullable=False)
+    activity_type = Column(String(50), nullable=False)  # e.g., 'watering', 'fertilizing', 'pruning'
+    notes = Column(Text)
+    performed_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    user_plant = relationship('UserPlant', back_populates='care_logs')
+
+    def __repr__(self):
+        return f"<CareLog(user_plant_id={self.user_plant_id}, activity_type='{self.activity_type}')>"
+
+
+# Optional: Additional tables that might be useful for future features
+
+class PostcodeZoneMapping(Base):
+    """Mapping table for postcodes to hardiness zones."""
+    __tablename__ = 'postcode_zone_mappings'
+
+    id = Column(Integer, primary_key=True)
+    postcode = Column(String(10), nullable=False, index=True)  # e.g., '02110'
+    zone_id = Column(Integer, ForeignKey('zones.id', ondelete='CASCADE'), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationship
+    zone = relationship('Zone')
+
+    __table_args__ = (
+        UniqueConstraint('postcode', 'zone_id', name='uix_postcode_zone'),
     )
 
-    plant: Mapped["Plant"] = relationship(back_populates="schedules")
-    zone: Mapped["Zone"] = relationship(back_populates="schedules")
-
-    def __repr__(self) -> str:
-        return f"<PlantingSchedule(id={self.id}, plant_id={self.plant_id}, zone_id={self.zone_id}, year={self.year})>"
+    def __repr__(self):
+        return f"<PostcodeZoneMapping(postcode='{self.postcode}', zone_id={self.zone_id})>"
 
 
-class Pest(Base):
-    """Pest that affects plants."""
+class PlantCategory(Base):
+    """Model for categorizing plants (e.g., vegetables, herbs, flowers)."""
+    __tablename__ = 'plant_categories'
 
-    __tablename__ = "pests"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    scientific_name: Mapped[Optional[str]] = mapped_column(String(100))
-    organic_control: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow
+    # Many-to-many relationship with plants through association table
+    plants = relationship(
+        'Plant', 
+        secondary='plant_category_association',
+        back_populates='categories'
     )
 
-    plants: Mapped[list["Plant"]] = relationship(
-        secondary="plant_pests", back_populates="pests"
-    )
-
-    def __repr__(self) -> str:
-        return f"<Pest(id={self.id}, name='{self.name}')>"
+    def __repr__(self):
+        return f"<PlantCategory(name='{self.name}', id={self.id})>"
 
 
-# Association table for many-to-many relationship between plants and pests
-class PlantPest(Base):
-    """Association table linking plants to pests."""
+# Association table for plant categories
+plant_category_association = Table(
+    'plant_category_association',
+    Base.metadata,
+    Column('plant_id', Integer, ForeignKey('plants.id', ondelete='CASCADE'), primary_key=True),
+    Column('category_id', Integer, ForeignKey('plant_categories.id', ondelete='CASCADE'), primary_key=True)
+)
 
-    __tablename__ = "plant_pests"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plant_id: Mapped[int] = mapped_column(
-        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
-    )
-    pest_id: Mapped[int] = mapped_column(
-        ForeignKey("pests.id", ondelete="CASCADE"), nullable=False
-    )
-    severity: Mapped[Optional[str]] = mapped_column(String(20))  # low, medium, high
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-
-    __table_args__ = (UniqueConstraint("plant_id", "pest_id", name="uix_plant_pest"),)
-
-    def __repr__(self) -> str:
-        return f"<PlantPest(plant_id={self.plant_id}, pest_id={self.pest_id})>"
+# Add categories relationship to Plant model
+Plant.categories = relationship(
+    'PlantCategory',
+    secondary=plant_category_association,
+    back_populates='plants'
+)

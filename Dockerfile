@@ -9,7 +9,7 @@ WORKDIR /app
 
 # Copy requirements first for better caching
 COPY src/requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Second stage: runtime
 FROM python:3.11-alpine
@@ -21,8 +21,8 @@ RUN apk add --no-cache sqlite libstdc++
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 # Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Set working directory
 WORKDIR /app

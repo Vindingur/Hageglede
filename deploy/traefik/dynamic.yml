@@ -1,7 +1,7 @@
 http:
   routers:
     hageglede-main:
-      rule: "Host(`hageglede.no`) || Host(`projects.vindingur.no`) && PathPrefix(`/hageglede`)"
+      rule: "Host(`hageplan.no`) || Host(`projects.vindingur.no`) && PathPrefix(`/hageplan`)"
       service: app-service
       entryPoints:
         - websecure
@@ -13,7 +13,7 @@ http:
         certResolver: le
 
     hageglede-redirect:
-      rule: "Host(`hageglede.no`) || Host(`projects.vindingur.no`) && PathPrefix(`/hageglede`)"
+      rule: "Host(`hageplan.no`) || Host(`projects.vindingur.no`) && PathPrefix(`/hageplan`)"
       entryPoints:
         - web
       middlewares:

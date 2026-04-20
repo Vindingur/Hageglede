@@ -1,55 +1,47 @@
-# Multi-stage Dockerfile for hageglede FastAPI application
+# Multi-stage Dockerfile for FastAPI application
 FROM python:3.11-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache gcc musl-dev linux-headers
 
-# Create and set working directory
+# Set working directory
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt .
+COPY src/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Production stage
+# Second stage: runtime
 FROM python:3.11-alpine
 
 # Install runtime dependencies
-RUN apk add --no-cache sqlite
+RUN apk add --no-cache sqlite libstdc++
 
 # Create non-root user
-RUN addgroup -g 1000 -S appuser && \
-    adduser -u 1000 -S appuser -G appuser
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+ENV PATH=/root/.local/bin:$PATH
 
 # Set working directory
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
 # Copy application code
-COPY src/hageglede ./src/hageglede
-COPY app ./app
-COPY frontend ./frontend
-COPY data ./data
+COPY src/ .
 
 # Create data directory and set permissions
-RUN mkdir -p /data && \
-    chown -R appuser:appuser /data /app
+RUN mkdir -p /data && chown -R appuser:appgroup /data
 
 # Switch to non-root user
 USER appuser
 
-# Expose application port
+# Expose port
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()" || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Run the application
-CMD ["uvicorn", "src.hageglede.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "hageglede.main:app", "--host", "0.0.0.0", "--port", "8000"]

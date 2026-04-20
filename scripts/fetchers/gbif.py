@@ -1,5 +1,6 @@
 """GBIF data fetcher for plant occurrences and species information."""
 
+import asyncio
 import requests
 import pandas as pd
 import logging
@@ -172,6 +173,65 @@ class GBIFClient:
         except requests.RequestException as e:
             logger.error(f"Error fetching species details for key {taxon_key}: {e}")
             return None
+
+
+class GbifFetcher:
+    """Async wrapper for GBIF API operations."""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """Initialize the GBIF fetcher.
+        
+        Args:
+            config: Configuration dictionary (currently unused but kept for compatibility).
+        """
+        self.config = config or {}
+        self.client = GBIFClient()
+    
+    async def search(self, query: str, limit: int = 10) -> List[Dict]:
+        """Search for species by name.
+        
+        Args:
+            query: Scientific or vernacular name to search for.
+            limit: Maximum number of results.
+            
+        Returns:
+            List of dicts with keys 'scientific_name', 'canonical_name', 'rank'.
+        """
+        # Run the synchronous client method in a thread pool
+        raw_results = await asyncio.to_thread(self.client.search_species, query, limit)
+        
+        # Transform to required format
+        results = []
+        for result in raw_results:
+            transformed = {
+                'scientific_name': result.get('scientific_name'),
+                'canonical_name': result.get('canonical_name'),
+                'rank': result.get('taxon_rank')
+            }
+            results.append(transformed)
+        
+        return results
+    
+    async def fetch_occurrences(self, taxon_key: int) -> pd.DataFrame:
+        """Fetch occurrence records for a taxon.
+        
+        Args:
+            taxon_key: GBIF taxon key.
+            
+        Returns:
+            DataFrame with occurrence data.
+        """
+        # Run the synchronous client method in a thread pool
+        raw_occurrences = await asyncio.to_thread(
+            self.client.get_occurrences, 
+            taxon_key, 
+            "NO",  # Norway
+            500     # Default limit
+        )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(raw_occurrences) if raw_occurrences else pd.DataFrame()
+        return df
 
 
 def fetch_norwegian_plant_occurrences(plant_names: List[str], max_occurrences_per_species: int = 200) -> pd.DataFrame:

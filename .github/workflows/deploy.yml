@@ -17,7 +17,7 @@ jobs:
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
             set -e
-            cd /Hageglede
+            cd Hageglede
             git pull origin main
             docker compose pull --quiet || true
             docker compose up -d --build

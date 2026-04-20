@@ -1,329 +1,173 @@
 #!/usr/bin/env python3
 """
-Hageglede Phase 0.5 Data Pipeline Core
-Main pipeline runner that orchestrates fetch → transform → load workflow.
+Hageglede Data Pipeline
+
+A complete data processing pipeline for gardening planning:
+- Fetches plant data from Artsdatabanken
+- Fetches species observations from GBIF
+- Fetches climate data from MET (Norwegian Meteorological Institute)
+- Transforms and loads into local database
 """
 
+import asyncio
 import logging
 import sys
-import time
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from config import PipelineConfig, SourceConfig
-import loaders
-from fetchers.base import BaseFetcher
-from transformers.base import BaseTransformer
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from scripts.config import PipelineConfig, load_config
+from scripts.fetchers.artsdatabanken import ArtsdatabankenFetcher
+from scripts.fetchers.gbif import GbifFetcher
+from scripts.fetchers.met import MetFetcher
+from scripts.transformers.plants import PlantTransformer
+from scripts.transformers.climate import ClimateTransformer
+from scripts.loaders import DatabaseLoader
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class PipelineResult:
-    """Result from running a pipeline source."""
-    source: str
-    success: bool
-    fetched_count: Optional[int] = None
-    transformed_count: Optional[int] = None
-    loaded_count: Optional[int] = None
-    error: Optional[str] = None
-    duration: float = 0.0
-
-
-class PipelineRunner:
-    """Main pipeline orchestrator."""
+class HagegledePipeline:
+    """Main pipeline orchestrating data flow from sources to database."""
     
     def __init__(self, config: PipelineConfig):
         self.config = config
-        self.results: List[PipelineResult] = []
+        self.fetchers = {
+            'artsdatabanken': ArtsdatabankenFetcher(config.sources.artsdatabanken),
+            'gbif': GbifFetcher(config.sources.gbif),
+            'met': MetFetcher(config.sources.met),
+        }
+        self.transformers = {
+            'plants': PlantTransformer(),
+            'climate': ClimateTransformer(),
+        }
+        self.loader = DatabaseLoader(config.database)
+        self.logger = logging.getLogger(self.__class__.__name__)
+    
+    async def run(self) -> dict:
+        """Execute the full pipeline."""
+        self.logger.info("Starting Hageglede pipeline run")
+        results = {
+            'started_at': datetime.utcnow().isoformat(),
+            'fetch_results': {},
+            'transform_results': {},
+            'load_results': {},
+            'errors': []
+        }
         
-    def fetch(self, source_name: str, source_config: SourceConfig) -> List[Dict[str, Any]]:
-        """Fetch data from a source using the appropriate fetcher."""
         try:
-            # Dynamically import the fetcher based on source type
-            if source_config.type == "vapi":
-                from fetchers.vapi_fetcher import VapiFetcher
-                fetcher: BaseFetcher = VapiFetcher(source_config)
-            elif source_config.type == "elevenlabs":
-                from fetchers.elevenlabs_fetcher import ElevenLabsFetcher
-                fetcher: BaseFetcher = ElevenLabsFetcher(source_config)
-            elif source_config.type == "paperspace":
-                from fetchers.paperspace_fetcher import PaperspaceFetcher
-                fetcher: BaseFetcher = PaperspaceFetcher(source_config)
-            else:
-                raise ValueError(f"Unknown source type: {source_config.type}")
+            # Step 1: Fetch data from all sources
+            self.logger.info("Fetching data from sources...")
+            raw_data = await self._fetch_all()
+            results['fetch_results'] = {k: len(v) if isinstance(v, list) else 'success' 
+                                        for k, v in raw_data.items()}
             
-            logger.info(f"Fetching from {source_name}...")
-            raw_data = fetcher.fetch()
+            # Step 2: Transform data
+            self.logger.info("Transforming data...")
+            transformed = self._transform_all(raw_data)
+            results['transform_results'] = {k: len(v) if isinstance(v, list) else 'success' 
+                                            for k, v in transformed.items()}
             
-            if not raw_data:
-                logger.warning(f"No data fetched from {source_name}")
-                return []
+            # Step 3: Load to database
+            self.logger.info("Loading to database...")
+            load_results = await self._load_all(transformed)
+            results['load_results'] = load_results
             
-            logger.info(f"Fetched {len(raw_data)} items from {source_name}")
-            return raw_data
+            results['status'] = 'success'
+            self.logger.info("Pipeline completed successfully")
             
         except Exception as e:
-            logger.error(f"Error fetching from {source_name}: {str(e)}", exc_info=True)
+            self.logger.error(f"Pipeline failed: {e}")
+            results['status'] = 'failed'
+            results['errors'].append(str(e))
             raise
-    
-    def transform(self, source_name: str, source_config: SourceConfig, raw_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Transform raw data using the appropriate transformer."""
-        try:
-            # Dynamically import the transformer based on source type
-            if source_config.type == "vapi":
-                from transformers.vapi_transformer import VapiTransformer
-                transformer: BaseTransformer = VapiTransformer(source_config)
-            elif source_config.type == "elevenlabs":
-                from transformers.elevenlabs_transformer import ElevenLabsTransformer
-                transformer: BaseTransformer = ElevenLabsTransformer(source_config)
-            elif source_config.type == "paperspace":
-                from transformers.paperspace_transformer import PaperspaceTransformer
-                transformer: BaseTransformer = PaperspaceTransformer(source_config)
-            else:
-                raise ValueError(f"Unknown source type: {source_config.type}")
-            
-            logger.info(f"Transforming {len(raw_data)} items from {source_name}...")
-            transformed_data = transformer.transform(raw_data)
-            
-            if not transformed_data:
-                logger.warning(f"No data transformed from {source_name}")
-                return []
-            
-            logger.info(f"Transformed {len(transformed_data)} items from {source_name}")
-            return transformed_data
-            
-        except Exception as e:
-            logger.error(f"Error transforming data from {source_name}: {str(e)}", exc_info=True)
-            raise
-    
-    def load(self, source_name: str, transformed_data: List[Dict[str, Any]]) -> int:
-        """Load transformed data into the database."""
-        try:
-            loader = loaders.SQLiteLoader(self.config.database_path)
-            loaded_count = loader.upsert(transformed_data, source_name)
-            
-            if loaded_count > 0:
-                logger.info(f"Loaded {loaded_count} items from {source_name} into database")
-            else:
-                logger.warning(f"No items loaded from {source_name} (possibly all duplicates)")
-            
-            return loaded_count
-            
-        except Exception as e:
-            logger.error(f"Error loading data from {source_name}: {str(e)}", exc_info=True)
-            raise
-    
-    def run_source(self, source_name: str, source_config: SourceConfig) -> PipelineResult:
-        """Run the full pipeline for a single source."""
-        logger.info(f"=== Processing source: {source_name} ===")
-        start_time = time.time()
         
-        try:
-            # 1. Fetch
-            raw_data = self.fetch(source_name, source_config)
-            if not raw_data:
-                return PipelineResult(
-                    source=source_name,
-                    success=False,
-                    error="No data fetched",
-                    duration=time.time() - start_time
-                )
-            
-            # 2. Transform
-            transformed_data = self.transform(source_name, source_config, raw_data)
-            if not transformed_data:
-                return PipelineResult(
-                    source=source_name,
-                    success=False,
-                    error="No data transformed after fetching",
-                    duration=time.time() - start_time
-                )
-            
-            # 3. Load
-            loaded_count = self.load(source_name, transformed_data)
-            
-            result = PipelineResult(
-                source=source_name,
-                success=True,
-                fetched_count=len(raw_data),
-                transformed_count=len(transformed_data),
-                loaded_count=loaded_count,
-                duration=time.time() - start_time
-            )
-            
-            logger.info(f"✓ Completed {source_name}: {len(raw_data)} fetched → {len(transformed_data)} transformed → {loaded_count} loaded")
-            return result
-            
-        except Exception as e:
-            logger.error(f"✗ Pipeline failed for {source_name}: {str(e)}", exc_info=True)
-            return PipelineResult(
-                source=source_name,
-                success=False,
-                error=str(e),
-                duration=time.time() - start_time
-            )
-    
-    def run(self, sources: Optional[List[str]] = None, dry_run: bool = False) -> List[PipelineResult]:
-        """
-        Run the pipeline for all (or specified) sources.
-        
-        Args:
-            sources: List of source names to run, or None for all sources
-            dry_run: If True, only fetch and transform, don't load to database
-        
-        Returns:
-            List of PipelineResult objects
-        """
-        logger.info("Starting Phase 0.5 Data Pipeline")
-        logger.info(f"Configuration: {self.config}")
-        logger.info(f"Sources to process: {sources or 'all'}")
-        logger.info(f"Dry run: {dry_run}")
-        
-        self.results = []
-        
-        # Determine which sources to process
-        sources_to_process = sources or list(self.config.sources.keys())
-        
-        # Create data directory if it doesn't exist
-        data_dir = Path(self.config.database_path).parent
-        data_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize database if not dry run
-        if not dry_run:
-            loader = loaders.SQLiteLoader(self.config.database_path)
-            loader.initialize_schema()
-        
-        for source_name in sources_to_process:
-            if source_name not in self.config.sources:
-                logger.warning(f"Source '{source_name}' not found in configuration, skipping")
-                continue
-            
-            source_config = self.config.sources[source_name]
-            
-            if dry_run:
-                logger.info(f"DRY RUN: Processing {source_name} (skip loading)")
-                try:
-                    raw_data = self.fetch(source_name, source_config)
-                    transformed_data = self.transform(source_name, source_config, raw_data)
-                    
-                    result = PipelineResult(
-                        source=source_name,
-                        success=True if raw_data and transformed_data else False,
-                        fetched_count=len(raw_data) if raw_data else 0,
-                        transformed_count=len(transformed_data) if transformed_data else 0,
-                        loaded_count=0,
-                        error=None if (raw_data and transformed_data) else "Dry run: no data or transformation failed",
-                        duration=time.time() - start_time
-                    )
-                except Exception as e:
-                    result = PipelineResult(
-                        source=source_name,
-                        success=False,
-                        error=str(e),
-                        duration=time.time() - start_time
-                    )
-            else:
-                result = self.run_source(source_name, source_config)
-            
-            self.results.append(result)
-        
-        # Print summary
-        self.print_summary(dry_run)
-        
-        return self.results
-    
-    def print_summary(self, dry_run: bool = False):
-        """Print a summary of pipeline execution."""
-        logger.info("=" * 60)
-        logger.info("PIPELINE EXECUTION SUMMARY")
-        logger.info("=" * 60)
-        
-        if not self.results:
-            logger.info("No sources processed")
-            return
-        
-        successful = [r for r in self.results if r.success]
-        failed = [r for r in self.results if not r.success]
-        
-        logger.info(f"Total sources: {len(self.results)}")
-        logger.info(f"Successful: {len(successful)}")
-        logger.info(f"Failed: {len(failed)}")
-        
-        if dry_run:
-            logger.info("Mode: DRY RUN (no data was saved to database)")
-        
-        logger.info("-" * 60)
-        
-        for result in self.results:
-            status = "✓" if result.success else "✗"
-            if result.success:
-                details = f"Fetched: {result.fetched_count}, Transformed: {result.transformed_count}, Loaded: {result.loaded_count}"
-                if dry_run:
-                    details = f"Fetched: {result.fetched_count}, Transformed: {result.transformed_count} (dry run)"
-            else:
-                details = f"Error: {result.error}"
-            
-            logger.info(f"{status} {result.source}: {details} ({result.duration:.2f}s)")
-        
-        logger.info("=" * 60)
-        
-        if failed:
-            logger.warning(f"{len(failed)} source(s) failed. Check logs for details.")
-        else:
-            logger.info("All sources processed successfully!")
-
-
-def run_pipeline(
-    config_path: Optional[str] = None,
-    sources: Optional[List[str]] = None,
-    dry_run: bool = False,
-    verbose: bool = False
-) -> List[PipelineResult]:
-    """
-    Convenience function to run the pipeline.
-    
-    Args:
-        config_path: Path to configuration file (default: ~/.hageglede/config.yaml)
-        sources: List of source names to run, or None for all sources
-        dry_run: If True, only fetch and transform, don't load to database
-        verbose: Enable verbose logging
-        
-    Returns:
-        List of PipelineResult objects
-    """
-    # Configure logging
-    log_level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler('pipeline.log')
-        ]
-    )
-    
-    try:
-        # Load configuration
-        config = PipelineConfig.load(config_path)
-        
-        # Create and run pipeline
-        pipeline = PipelineRunner(config)
-        results = pipeline.run(sources=sources, dry_run=dry_run)
+        finally:
+            results['finished_at'] = datetime.utcnow().isoformat()
         
         return results
+    
+    async def _fetch_all(self) -> dict:
+        """Fetch data from all configured sources."""
+        results = {}
         
-    except Exception as e:
-        logger.error(f"Pipeline failed to start: {str(e)}", exc_info=True)
-        raise
+        # Fetch plant data
+        if self.config.sources.artsdatabanken.enabled:
+            self.logger.info("Fetching from Artsdatabanken...")
+            results['plants'] = await self.fetchers['artsdatabanken'].fetch()
+        
+        # Fetch species observations
+        if self.config.sources.gbif.enabled:
+            self.logger.info("Fetching from GBIF...")
+            results['observations'] = await self.fetchers['gbif'].fetch()
+        
+        # Fetch climate data
+        if self.config.sources.met.enabled:
+            self.logger.info("Fetching from MET...")
+            results['climate'] = await self.fetchers['met'].fetch()
+        
+        return results
+    
+    def _transform_all(self, raw_data: dict) -> dict:
+        """Transform all fetched data."""
+        results = {}
+        
+        if 'plants' in raw_data:
+            self.logger.info("Transforming plant data...")
+            results['plants'] = self.transformers['plants'].transform(raw_data['plants'])
+        
+        if 'climate' in raw_data:
+            self.logger.info("Transforming climate data...")
+            results['climate'] = self.transformers['climate'].transform(raw_data['climate'])
+        
+        return results
+    
+    async def _load_all(self, transformed_data: dict) -> dict:
+        """Load all transformed data to database."""
+        results = {}
+        
+        async with self.loader:
+            if 'plants' in transformed_data:
+                self.logger.info("Loading plants to database...")
+                results['plants'] = await self.loader.load_plants(transformed_data['plants'])
+            
+            if 'climate' in transformed_data:
+                self.logger.info("Loading climate data to database...")
+                results['climate'] = await self.loader.load_climate(transformed_data['climate'])
+        
+        return results
 
 
-if __name__ == "__main__":
-    # Example usage
-    print("Hageglede Pipeline Runner")
-    print("Use via CLI: python -m scripts --help")
-    print("\nOr programmatically:")
-    print("from pipeline import run_pipeline")
-    print("results = run_pipeline(sources=['vapi'], dry_run=True, verbose=True)")
+async def main():
+    """Main entry point for pipeline execution."""
+    config_path = Path(__file__).parent / 'config.yaml'
+    
+    if not config_path.exists():
+        logger.error(f"Config file not found: {config_path}")
+        logger.info("Creating default config...")
+        config = PipelineConfig.default()
+    else:
+        config = load_config(config_path)
+    
+    pipeline = HagegledePipeline(config)
+    results = await pipeline.run()
+    
+    print(f"\nPipeline Results:")
+    print(f"Status: {results['status']}")
+    print(f"Fetch: {results['fetch_results']}")
+    print(f"Transform: {results['transform_results']}")
+    print(f"Load: {results['load_results']}")
+    
+    return results
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

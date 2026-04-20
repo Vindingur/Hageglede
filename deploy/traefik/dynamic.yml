@@ -1,34 +1,58 @@
 http:
   routers:
-    hageplan-router:
+    hageglede-main:
+      rule: "Host(`hageglede.no`) || Host(`projects.vindingur.no`) && PathPrefix(`/hageglede`)"
+      service: app-service
       entryPoints:
         - websecure
-      rule: "PathPrefix(`/projects/hageplan`)"
-      service: hageplan-service
       middlewares:
-        - strip-hageplan-prefix
-        - rate-limit
+        - strip-hageglede-prefix
+        - compress
+        - headers-default
       tls:
-        certResolver: letsencrypt
-  
+        certResolver: le
+
+    hageglede-redirect:
+      rule: "Host(`hageglede.no`) || Host(`projects.vindingur.no`) && PathPrefix(`/hageglede`)"
+      entryPoints:
+        - web
+      middlewares:
+        - redirect-to-https
+      service: noop@internal
+
   services:
-    hageplan-service:
+    app-service:
       loadBalancer:
         servers:
-          - url: "http://hageplan:8000"
-  
+          - url: "http://app:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
   middlewares:
-    strip-hageplan-prefix:
+    strip-hageglede-prefix:
       stripPrefix:
         prefixes:
-          - "/projects/hageplan"
-    
-    rate-limit:
-      rateLimit:
-        average: 100
-        burst: 50
+          - "/hageglede"
 
-tls:
-  certificates:
-    - certFile: "/etc/traefik/certs/cert.pem"
-      keyFile: "/etc/traefik/certs/key.pem"
+    compress:
+      compress: {}
+
+    headers-default:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          X-Frame-Options: "DENY"
+          X-XSS-Protection: "1; mode=block"
+        sslRedirect: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true

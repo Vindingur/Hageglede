@@ -1,73 +1,47 @@
-# Multi-stage Dockerfile for Hageglede (Hageplan)
-# Production FastAPI with SQLite persistence
-
-# Stage 1: Builder for frontend assets (if needed)
-FROM node:18-alpine AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/ .
-# If you have npm build steps, add them here
-# RUN npm install && npm run build
-
-# Stage 2: Python builder
-FROM python:3.11-slim AS python-builder
-WORKDIR /app
+# Multi-stage Dockerfile for FastAPI application
+FROM python:3.11-alpine AS builder
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache gcc musl-dev linux-headers
 
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY src/ ./src/
-COPY app/ ./app/
-COPY scripts/ ./scripts/
-
-# Stage 3: Production runtime
-FROM python:3.11-slim
+# Set working directory
 WORKDIR /app
 
+# Copy requirements first for better caching
+COPY src/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Second stage: runtime
+FROM python:3.11-alpine
+
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache sqlite libstdc++
 
-# Copy virtual environment from builder
-COPY --from=python-builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Create non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Copy frontend assets (from frontend-builder or directly)
-COPY --from=frontend-builder /app/frontend /app/frontend
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+ENV PATH=/root/.local/bin:$PATH
+
+# Set working directory
+WORKDIR /app
 
 # Copy application code
-COPY src/ ./src/
-COPY app/ ./app/
-COPY scripts/ ./scripts/
+COPY src/ .
 
-# Create volume directory for SQLite
-RUN mkdir -p /data
-VOLUME /data
+# Create data directory and set permissions
+RUN mkdir -p /data && chown -R appuser:appgroup /data
 
-# Set environment variables
-ENV DATABASE_URL="sqlite:////data/hageglede.db"
-ENV PYTHONPATH="/app"
-ENV PORT=8000
-ENV HOST=0.0.0.0
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "hageglede.main:app", "--host", "0.0.0.0", "--port", "8000"]

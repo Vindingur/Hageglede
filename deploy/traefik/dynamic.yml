@@ -1,0 +1,34 @@
+http:
+  routers:
+    hageplan-router:
+      entryPoints:
+        - websecure
+      rule: "PathPrefix(`/projects/hageplan`)"
+      service: hageplan-service
+      middlewares:
+        - strip-hageplan-prefix
+        - rate-limit
+      tls:
+        certResolver: letsencrypt
+  
+  services:
+    hageplan-service:
+      loadBalancer:
+        servers:
+          - url: "http://hageplan:8000"
+  
+  middlewares:
+    strip-hageplan-prefix:
+      stripPrefix:
+        prefixes:
+          - "/projects/hageplan"
+    
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+
+tls:
+  certificates:
+    - certFile: "/etc/traefik/certs/cert.pem"
+      keyFile: "/etc/traefik/certs/key.pem"

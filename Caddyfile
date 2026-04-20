@@ -1,0 +1,46 @@
+# Alternative Caddy reverse proxy configuration for hageglede
+# Use if Traefik proves too complex
+# Caddy automatically handles SSL via Let's Encrypt
+
+vindingur.no {
+    # Path-based routing for hageplan project
+    handle_path /projects/hageplan/* {
+        # Strip the /projects/hageplan prefix before forwarding
+        rewrite * /{path}
+        
+        # Reverse proxy to hageglede container
+        reverse_proxy hageglede:8000 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Real-IP {remote_host}
+        }
+    }
+    
+    # Default handler for other requests
+    @default {
+        not path /projects/hageplan/*
+    }
+    handle @default {
+        respond "Not Found" 404
+    }
+}
+
+# Caddy will automatically:
+# 1. Obtain SSL certificate from Let's Encrypt
+# 2. Renew certificates automatically
+# 3. Serve HTTP/2 by default
+# 4. Handle ACME challenges via HTTP-01
+
+# To use this configuration:
+# 1. Install Caddy on the server: 
+#    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+#    echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" | tee /etc/apt/sources.list.d/caddy-stable.list
+#    apt update && apt install caddy
+#
+# 2. Replace /etc/caddy/Caddyfile with this content
+# 3. Restart Caddy: systemctl restart caddy
+#
+# 3. Update docker-compose.yml to comment out Traefik and expose hageglede port
+#    ports:
+#      - "8000:8000"
+#
+# 4. Ensure DNS points vindingur.no to server IP

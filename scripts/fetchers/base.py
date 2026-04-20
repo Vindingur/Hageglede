@@ -1,69 +1,177 @@
 """
-Abstract base class for data fetchers.
+Abstract base class for data fetchers in the Hageglede pipeline.
 
-This module defines the BaseFetcher abstract base class that all data fetchers
-must implement. It provides a common interface for fetching data from various
-sources.
+This module defines the BaseFetcher abstract class that all data fetchers
+must implement. It provides a consistent interface for fetching data from
+various sources.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypeVar, Generic
+from dataclasses import dataclass
+from datetime import datetime
 import logging
+
+# Type variable for the data being fetched
+T = TypeVar('T')
 
 logger = logging.getLogger(__name__)
 
 
-class BaseFetcher(ABC):
-    """Abstract base class for data fetchers.
+@dataclass
+class FetchResult(Generic[T]):
+    """Result container for fetch operations."""
     
-    All data fetchers must inherit from this class and implement the fetch() method.
-    This ensures a consistent interface for data acquisition across different
-    data sources.
+    data: T
+    """The fetched data."""
+    
+    metadata: Dict[str, Any]
+    """Metadata about the fetch operation."""
+    
+    timestamp: datetime
+    """When the data was fetched."""
+    
+    source: str
+    """The data source identifier."""
+    
+    success: bool = True
+    """Whether the fetch was successful."""
+    
+    error_message: Optional[str] = None
+    """Error message if fetch failed."""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary for serialization."""
+        return {
+            'data': self.data,
+            'metadata': self.metadata,
+            'timestamp': self.timestamp.isoformat(),
+            'source': self.source,
+            'success': self.success,
+            'error_message': self.error_message
+        }
+
+
+@dataclass  
+class FetchConfig:
+    """Configuration for fetch operations."""
+    
+    url: Optional[str] = None
+    """URL to fetch data from."""
+    
+    api_key: Optional[str] = None
+    """API key for authenticated sources."""
+    
+    params: Optional[Dict[str, Any]] = None
+    """Query parameters for the request."""
+    
+    timeout: int = 30
+    """Request timeout in seconds."""
+    
+    retry_attempts: int = 3
+    """Number of retry attempts on failure."""
+    
+    retry_delay: int = 5
+    """Delay between retries in seconds."""
+    
+    cache_duration: Optional[int] = None
+    """Cache duration in seconds (None for no caching)."""
+
+
+class BaseFetcher(ABC, Generic[T]):
+    """
+    Abstract base class for data fetchers.
+    
+    All data fetchers in the Hageglede pipeline must inherit from this class
+    and implement the abstract methods.
     
     Attributes:
-        name: Human-readable name of the fetcher
-        source: String identifier for the data source
+        source_name (str): Unique identifier for the data source.
+        config (FetchConfig): Configuration for fetch operations.
     """
     
-    def __init__(self, name: str, source: str):
-        """Initialize the fetcher.
+    def __init__(self, source_name: str, config: Optional[FetchConfig] = None):
+        """
+        Initialize the fetcher.
         
         Args:
-            name: Human-readable name of the fetcher
-            source: String identifier for the data source
+            source_name: Unique identifier for the data source.
+            config: Optional configuration for fetch operations.
         """
-        self.name = name
-        self.source = source
-        logger.debug(f"Initialized {self.__class__.__name__}: {name} for source {source}")
+        self.source_name = source_name
+        self.config = config or FetchConfig()
+        self._logger = logging.getLogger(f"{__name__}.{self.source_name}")
     
     @abstractmethod
-    def fetch(self, **kwargs) -> Dict[str, Any]:
-        """Fetch data from the source.
+    async def fetch(self) -> FetchResult[T]:
+        """
+        Fetch data from the source.
         
-        This is the main method that all fetchers must implement. It should
-        handle data retrieval, error handling, and return the data in a
-        standardized format.
+        This is the main method that all concrete fetchers must implement.
+        It should handle all aspects of fetching data including error handling,
+        retries, and formatting the result.
         
-        Args:
-            **kwargs: Fetcher-specific parameters (e.g., location, date range, filters)
-            
         Returns:
-            A dictionary containing the fetched data. The structure should be
-            consistent for similar data types:
-            - 'data': The actual data (list, dict, or other structure)
-            - 'metadata': Information about the fetch operation
-            - 'status': Status of the fetch ('success', 'partial', 'error')
-            - 'error': Error message if status is 'error'
+            FetchResult containing the fetched data and metadata.
             
         Raises:
-            Fetcher-specific exceptions for unrecoverable errors
+            FetchError: If the fetch operation fails after all retries.
         """
         pass
     
-    def __repr__(self) -> str:
-        """Return a string representation of the fetcher."""
-        return f"{self.__class__.__name__}(name='{self.name}', source='{self.source}')"
+    @abstractmethod
+    def validate_config(self) -> bool:
+        """
+        Validate the fetcher configuration.
+        
+        Returns:
+            True if configuration is valid, False otherwise.
+        """
+        pass
     
-    def __str__(self) -> str:
-        """Return a human-readable string representation."""
-        return f"{self.name} fetcher for {self.source}"
+    def get_source_info(self) -> Dict[str, Any]:
+        """
+        Get information about the data source.
+        
+        Returns:
+            Dictionary with source information.
+        """
+        return {
+            'source_name': self.source_name,
+            'config': self.config.__dict__,
+            'class_name': self.__class__.__name__
+        }
+    
+    async def health_check(self) -> bool:
+        """
+        Perform a health check on the data source.
+        
+        Returns:
+            True if the source is accessible, False otherwise.
+        """
+        try:
+            # Try a simple fetch or ping operation
+            result = await self.fetch()
+            return result.success
+        except Exception as e:
+            self._logger.error(f"Health check failed for {self.source_name}: {e}")
+            return False
+
+
+class FetchError(Exception):
+    """Exception raised when a fetch operation fails."""
+    
+    def __init__(self, source: str, message: str, status_code: Optional[int] = None):
+        self.source = source
+        self.message = message
+        self.status_code = status_code
+        super().__init__(f"Fetch failed for {source}: {message}")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert error to dictionary for serialization."""
+        return {
+            'source': self.source,
+            'message': self.message,
+            'status_code': self.status_code,
+            'type': self.__class__.__name__
+        }

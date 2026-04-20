@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic/dynamic.yml:ro
+      - traefik-certificates:/letsencrypt
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=https"
+      - "traefik.http.routers.traefik.rule=Host(`vindingur.no`) && PathPrefix(`/traefik`)"
+      - "traefik.http.routers.traefik.middlewares=traefik-auth"
+      - "traefik.http.routers.traefik.tls=true"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.traefik-auth.basicauth.usersfile=/letsencrypt/.htpasswd"
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+  hageplan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hageplan
+    restart: unless-stopped
+    networks:
+      - proxy
+    volumes:
+      - hageplan-data:/app/data
+      - ./frontend:/app/frontend:ro
+    environment:
+      - DATABASE_URL=sqlite:////app/data/hageglede.db
+      - DEBUG=false
+      - CORS_ORIGINS=https://vindingur.no
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hageplan.entrypoints=https"
+      - "traefik.http.routers.hageplan.rule=Host(`vindingur.no`) && PathPrefix(`/projects/hageplan`)"
+      - "traefik.http.routers.hageplan.middlewares=hageplan-stripprefix"
+      - "traefik.http.routers.hageplan.tls=true"
+      - "traefik.http.routers.hageplan.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.hageplan-stripprefix.stripprefix.prefixes=/projects/hageplan"
+      - "traefik.http.services.hageplan.loadbalancer.server.port=8000"
+
+volumes:
+  traefik-certificates:
+  hageplan-data:
+
+networks:
+  proxy:
+    external: true
+    name: proxy

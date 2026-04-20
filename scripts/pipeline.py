@@ -1,31 +1,20 @@
 #!/usr/bin/env python3
 """
-Hageglede Data Pipeline
+Pipeline for the hageglede project.
 
-A complete data processing pipeline for gardening planning:
-- Fetches plant data from Artsdatabanken
-- Fetches species observations from GBIF
-- Fetches climate data from MET (Norwegian Meteorological Institute)
-- Transforms and loads into local database
+This script coordinates fetching species data from GBIF,
+processing it, and storing the results.
 """
 
 import asyncio
 import logging
-import sys
-from datetime import datetime
 from pathlib import Path
 
-# Add project root to path for imports
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+import pandas as pd
 
-from scripts.config import PipelineConfig, load_config
-from scripts.fetchers.artsdatabanken import ArtsdatabankenFetcher
 from scripts.fetchers.gbif import GbifFetcher
-from scripts.fetchers.met import MetFetcher
-from scripts.transformers.plants import PlantTransformer
-from scripts.transformers.climate import ClimateTransformer
-from scripts.loaders import DatabaseLoader
+from scripts.processor import SpeciesProcessor
+from scripts.storage import SpeciesStorage
 
 # Configure logging
 logging.basicConfig(
@@ -35,138 +24,103 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class HagegledePipeline:
-    """Main pipeline orchestrating data flow from sources to database."""
-    
-    def __init__(self, config: PipelineConfig):
-        self.config = config
-        self.fetchers = {
-            'artsdatabanken': ArtsdatabankenFetcher(config.sources.artsdatabanken),
-            'gbif': GbifFetcher(config.sources.gbif),
-            'met': MetFetcher(config.sources.met),
-        }
-        self.transformers = {
-            'plants': PlantTransformer(),
-            'climate': ClimateTransformer(),
-        }
-        self.loader = DatabaseLoader(config.database)
-        self.logger = logging.getLogger(self.__class__.__name__)
-    
-    async def run(self) -> dict:
-        """Execute the full pipeline."""
-        self.logger.info("Starting Hageglede pipeline run")
-        results = {
-            'started_at': datetime.utcnow().isoformat(),
-            'fetch_results': {},
-            'transform_results': {},
-            'load_results': {},
-            'errors': []
-        }
+class Pipeline:
+    def __init__(self, config_path: str = None):
+        self.config_path = config_path
+        self.fetcher = GbifFetcher()
+        self.processor = SpeciesProcessor()
+        self.storage = SpeciesStorage()
+
+    async def run(self, query: str, limit: int = 50):
+        """Run the complete pipeline for a given search query."""
+        logger.info(f"Starting pipeline with query: '{query}' (limit: {limit})")
         
         try:
-            # Step 1: Fetch data from all sources
-            self.logger.info("Fetching data from sources...")
-            raw_data = await self._fetch_all()
-            results['fetch_results'] = {k: len(v) if isinstance(v, list) else 'success' 
-                                        for k, v in raw_data.items()}
+            # 1. Fetch species from GBIF
+            logger.info("Fetching species data from GBIF...")
+            species_list = await self.fetcher.search(query, limit=limit)
             
-            # Step 2: Transform data
-            self.logger.info("Transforming data...")
-            transformed = self._transform_all(raw_data)
-            results['transform_results'] = {k: len(v) if isinstance(v, list) else 'success' 
-                                            for k, v in transformed.items()}
+            if not species_list:
+                logger.warning(f"No species found for query: '{query}'")
+                return
             
-            # Step 3: Load to database
-            self.logger.info("Loading to database...")
-            load_results = await self._load_all(transformed)
-            results['load_results'] = load_results
+            logger.info(f"Found {len(species_list)} species")
             
-            results['status'] = 'success'
-            self.logger.info("Pipeline completed successfully")
+            # 2. Process species data
+            logger.info("Processing species data...")
+            processed_species = self.processor.process(species_list)
+            
+            # 3. Store results
+            logger.info("Storing results...")
+            storage_results = await self.storage.store(processed_species)
+            
+            # 4. For each species, fetch occurrences
+            logger.info("Fetching occurrences for each species...")
+            occurrence_results = []
+            
+            for species in processed_species:
+                if 'taxon_key' in species:
+                    try:
+                        occurrences = await self.fetcher.fetch_occurrences(species['taxon_key'])
+                        if occurrences is not None and not occurrences.empty:
+                            logger.info(f"Found {len(occurrences)} occurrences for {species.get('canonical_name', 'unknown')}")
+                            occurrence_results.append({
+                                'species': species['canonical_name'],
+                                'taxon_key': species['taxon_key'],
+                                'occurrences': occurrences
+                            })
+                            # Store occurrences
+                            await self.storage.store_occurrences(species['canonical_name'], occurrences)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch occurrences for {species.get('canonical_name', 'unknown')}: {e}")
+            
+            logger.info(f"Pipeline completed successfully for query: '{query}'")
+            logger.info(f"- Processed {len(processed_species)} species")
+            logger.info(f"- Found occurrence data for {len(occurrence_results)} species")
+            
+            return {
+                'species': processed_species,
+                'occurrences': occurrence_results,
+                'storage': storage_results
+            }
             
         except Exception as e:
-            self.logger.error(f"Pipeline failed: {e}")
-            results['status'] = 'failed'
-            results['errors'].append(str(e))
+            logger.error(f"Pipeline failed: {e}")
             raise
-        
-        finally:
-            results['finished_at'] = datetime.utcnow().isoformat()
-        
-        return results
-    
-    async def _fetch_all(self) -> dict:
-        """Fetch data from all configured sources."""
+
+    async def run_multiple_queries(self, queries: list[str], limit_per_query: int = 20):
+        """Run pipeline for multiple queries sequentially."""
         results = {}
         
-        # Fetch plant data
-        if self.config.sources.artsdatabanken.enabled:
-            self.logger.info("Fetching from Artsdatabanken...")
-            results['plants'] = await self.fetchers['artsdatabanken'].fetch()
-        
-        # Fetch species observations
-        if self.config.sources.gbif.enabled:
-            self.logger.info("Fetching from GBIF...")
-            results['observations'] = await self.fetchers['gbif'].fetch()
-        
-        # Fetch climate data
-        if self.config.sources.met.enabled:
-            self.logger.info("Fetching from MET...")
-            results['climate'] = await self.fetchers['met'].fetch()
-        
-        return results
-    
-    def _transform_all(self, raw_data: dict) -> dict:
-        """Transform all fetched data."""
-        results = {}
-        
-        if 'plants' in raw_data:
-            self.logger.info("Transforming plant data...")
-            results['plants'] = self.transformers['plants'].transform(raw_data['plants'])
-        
-        if 'climate' in raw_data:
-            self.logger.info("Transforming climate data...")
-            results['climate'] = self.transformers['climate'].transform(raw_data['climate'])
-        
-        return results
-    
-    async def _load_all(self, transformed_data: dict) -> dict:
-        """Load all transformed data to database."""
-        results = {}
-        
-        async with self.loader:
-            if 'plants' in transformed_data:
-                self.logger.info("Loading plants to database...")
-                results['plants'] = await self.loader.load_plants(transformed_data['plants'])
-            
-            if 'climate' in transformed_data:
-                self.logger.info("Loading climate data to database...")
-                results['climate'] = await self.loader.load_climate(transformed_data['climate'])
-        
+        for query in queries:
+            logger.info(f"Processing query: '{query}'")
+            try:
+                result = await self.run(query, limit=limit_per_query)
+                results[query] = result
+            except Exception as e:
+                logger.error(f"Failed to process query '{query}': {e}")
+                results[query] = {'error': str(e)}
+                
         return results
 
 
 async def main():
-    """Main entry point for pipeline execution."""
-    config_path = Path(__file__).parent / 'config.yaml'
+    """Main entry point for the pipeline."""
+    import argparse
     
-    if not config_path.exists():
-        logger.error(f"Config file not found: {config_path}")
-        logger.info("Creating default config...")
-        config = PipelineConfig.default()
+    parser = argparse.ArgumentParser(description='Run the hageglede pipeline')
+    parser.add_argument('query', nargs='+', help='Search query(ies) for species')
+    parser.add_argument('--limit', type=int, default=50, help='Maximum number of species per query')
+    parser.add_argument('--config', type=str, help='Path to configuration file')
+    
+    args = parser.parse_args()
+    
+    pipeline = Pipeline(args.config)
+    
+    if len(args.query) == 1:
+        await pipeline.run(args.query[0], args.limit)
     else:
-        config = load_config(config_path)
-    
-    pipeline = HagegledePipeline(config)
-    results = await pipeline.run()
-    
-    print(f"\nPipeline Results:")
-    print(f"Status: {results['status']}")
-    print(f"Fetch: {results['fetch_results']}")
-    print(f"Transform: {results['transform_results']}")
-    print(f"Load: {results['load_results']}")
-    
-    return results
+        await pipeline.run_multiple_queries(args.query, args.limit)
 
 
 if __name__ == '__main__':

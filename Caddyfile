@@ -1,46 +1,113 @@
-# Alternative Caddy reverse proxy configuration for hageglede
-# Use if Traefik proves too complex
-# Caddy automatically handles SSL via Let's Encrypt
+# Caddyfile for hageglede.no
+# Alternative reverse proxy configuration if Traefik is not used
 
-vindingur.no {
-    # Path-based routing for hageplan project
-    handle_path /projects/hageplan/* {
-        # Strip the /projects/hageplan prefix before forwarding
-        rewrite * /{path}
-        
-        # Reverse proxy to hageglede container
-        reverse_proxy hageglede:8000 {
-            header_up X-Forwarded-Proto {scheme}
-            header_up X-Real-IP {remote_host}
-        }
+# Main domain with CNAME to projects.vindingur.no
+hageglede.no {
+    # Reverse proxy to FastAPI application
+    reverse_proxy http://app:8000 {
+        # Health check endpoint
+        health_uri /health
+        health_interval 30s
+        health_timeout 5s
     }
     
-    # Default handler for other requests
-    @default {
-        not path /projects/hageplan/*
+    # Enable automatic HTTPS with Let's Encrypt
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
-    handle @default {
-        respond "Not Found" 404
+    
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+    
+    # Compression
+    encode gzip zstd
+    
+    # Logging
+    log {
+        output stdout
+        format json
+        level INFO
     }
 }
 
-# Caddy will automatically:
-# 1. Obtain SSL certificate from Let's Encrypt
-# 2. Renew certificates automatically
-# 3. Serve HTTP/2 by default
-# 4. Handle ACME challenges via HTTP-01
+# Path-based routing for projects.vindingur.no/hageglede
+projects.vindingur.no {
+    handle_path /hageglede/* {
+        # Strip the prefix before forwarding
+        rewrite * /{path}
+        
+        # Proxy to the same app container
+        reverse_proxy http://app:8000 {
+            health_uri /health
+            health_interval 30s
+            health_timeout 5s
+        }
+        
+        # Same security headers
+        header {
+            X-Content-Type-Options nosniff
+            X-Frame-Options DENY
+            X-XSS-Protection "1; mode=block"
+            Referrer-Policy strict-origin-when-cross-origin
+            -Server
+        }
+    }
+    
+    # Static file serving for the main projects site
+    handle {
+        root * /var/www/projects
+        file_server
+    }
+    
+    # TLS configuration
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+}
 
-# To use this configuration:
-# 1. Install Caddy on the server: 
-#    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-#    echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" | tee /etc/apt/sources.list.d/caddy-stable.list
-#    apt update && apt install caddy
-#
-# 2. Replace /etc/caddy/Caddyfile with this content
-# 3. Restart Caddy: systemctl restart caddy
-#
-# 3. Update docker-compose.yml to comment out Traefik and expose hageglede port
-#    ports:
-#      - "8000:8000"
-#
-# 4. Ensure DNS points vindingur.no to server IP
+# Global options
+{
+    # Email for Let's Encrypt notifications
+    email dev@vindingur.no
+    
+    # Automatic HTTPS with staging for testing
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+    
+    # Default logging
+    log {
+        output stdout
+        level INFO
+    }
+    
+    # Admin API (optional)
+    admin :2019
+    
+    # Persist certificates
+    storage file_system {
+        root /data/caddy
+    }
+}
+
+# Server configuration block
+:443 {
+    # Import the domain configurations
+    import Caddyfile
+}
+
+# HTTP to HTTPS redirect
+:80 {
+    redir https://{host}{uri} permanent
+}
+
+# Docker health check endpoint
+:8080 {
+    respond /health 200 {
+        body "OK"
+    }
+}

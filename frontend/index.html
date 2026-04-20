@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hageglede - Plant Recommendation App</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌱</text></svg>">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-seedling"></i> Hageglede</h1>
+                <p class="tagline">Find the perfect plants for your garden based on your location and gardening effort</p>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="sidebar-left">
+                <section class="input-section card">
+                    <h2><i class="fas fa-search"></i> Find Your Plants</h2>
+                    
+                    <div class="form-group">
+                        <label for="postcode">
+                            <i class="fas fa-map-marker-alt"></i> Postcode
+                        </label>
+                        <input type="text" id="postcode" placeholder="e.g., 0271" maxlength="4" pattern="\d{4}">
+                        <small class="hint">Enter a 4-digit Norwegian postcode</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="effort">
+                            <i class="fas fa-tachometer-alt"></i> Gardening Effort Level
+                        </label>
+                        <div class="slider-container">
+                            <input type="range" id="effort" min="1" max="5" value="3">
+                            <div class="slider-values">
+                                <span class="slider-value">1</span>
+                                <span class="slider-value">2</span>
+                                <span class="slider-value">3</span>
+                                <span class="slider-value">4</span>
+                                <span class="slider-value">5</span>
+                            </div>
+                            <div class="slider-labels">
+                                <span>Low Effort</span>
+                                <span>High Effort</span>
+                            </div>
+                        </div>
+                        <div class="current-value">
+                            Current Level: <span id="effort-value">3</span>
+                            <div class="stars" id="effort-stars">
+                                <!-- Stars will be filled by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="find-plants" class="btn-primary">
+                        <i class="fas fa-search"></i> Find Plants
+                    </button>
+                    <button id="clear-filters" class="btn-secondary">
+                        <i class="fas fa-redo"></i> Clear Filters
+                    </button>
+                </section>
+
+                <section class="saved-plants-section card">
+                    <h2><i class="fas fa-heart"></i> My Saved Plants</h2>
+                    <div id="saved-plants-list">
+                        <p class="empty-state">No plants saved yet. Save plants you like for later!</p>
+                    </div>
+                </section>
+            </div>
+
+            <div class="content-main">
+                <div class="results-header">
+                    <h2><i class="fas fa-leaf"></i> Recommended Plants</h2>
+                    <div class="results-stats">
+                        <span id="results-count">0 plants found</span>
+                        <span class="filter-tags">
+                            <span id="location-tag" class="filter-tag hidden">
+                                <i class="fas fa-map-marker-alt"></i> <span id="location-value"></span>
+                            </span>
+                            <span id="effort-tag" class="filter-tag hidden">
+                                <i class="fas fa-tachometer-alt"></i> Effort: <span id="effort-tag-value"></span>
+                            </span>
+                        </span>
+                    </div>
+                </div>
+
+                <div id="loading" class="loading hidden">
+                    <div class="spinner"></div>
+                    <p>Finding the perfect plants for your garden...</p>
+                </div>
+
+                <div id="error-message" class="error-message hidden">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <div class="error-content">
+                        <h3>Something went wrong</h3>
+                        <p id="error-text"></p>
+                    </div>
+                </div>
+
+                <div id="plants-container" class="plants-grid">
+                    <!-- Plant cards will be inserted here by JavaScript -->
+                </div>
+
+                <div id="no-results" class="no-results hidden">
+                    <i class="fas fa-seedling"></i>
+                    <h3>No plants found</h3>
+                    <p>Try adjusting your postcode or effort level to see more recommendations.</p>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Hageglede • Plant Recommendation App • Made with <i class="fas fa-heart"></i> for Norwegian gardens</p>
+            <p class="footer-note">Data sourced from Artsdatabanken, GBIF, and MET Norway</p>
+        </footer>
+    </div>
+
+    <!-- Plant Card Template -->
+    <template id="plant-card-template">
+        <div class="plant-card">
+            <div class="plant-card-header">
+                <h3 class="plant-name"></h3>
+                <button class="save-btn" aria-label="Save plant">
+                    <i class="far fa-heart"></i>
+                </button>
+            </div>
+            
+            <div class="plant-meta">
+                <span class="plant-latin"></span>
+                <span class="plant-family"></span>
+            </div>
+            
+            <div class="plant-stats">
+                <div class="stat">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <div class="stat-content">
+                        <span class="stat-label">Effort Level</span>
+                        <div class="effort-stars"></div>
+                    </div>
+                </div>
+                <div class="stat">
+                    <i class="fas fa-apple-alt"></i>
+                    <div class="stat-content">
+                        <span class="stat-label">Yield</span>
+                        <span class="stat-value yield-value"></span>
+                    </div>
+                </div>
+                <div class="stat">
+                    <i class="fas fa-calendar-alt"></i>
+                    <div class="stat-content">
+                        <span class="stat-label">Growing Season</span>
+                        <span class="stat-value season-value"></span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="plant-description"></div>
+            
+            <div class="meal-ideas">
+                <h4><i class="fas fa-utensils"></i> Meal Ideas</h4>
+                <ul class="meal-list"></ul>
+            </div>
+            
+            <div class="plant-tags"></div>
+        </div>
+    </template>
+
+    <script src="app.js"></script>
+</body>
+</html>

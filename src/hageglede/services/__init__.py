@@ -1,6 +1,7 @@
-"""Services module for Hageglede application.
-
-This package contains business logic services for various features.
+"""
+Services module for Hageglede.
 """
 
-__all__ = ["crop_recommender"]
+from .recommender import CropRecommender, Plant
+
+__all__ = ["CropRecommender", "Plant"]

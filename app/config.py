@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     
     # Database configuration
-    database_url: str = "sqlite:///./hageglede.db"
+    database_url: str = "sqlite+aiosqlite:///./hageglede.db"
     
     # CORS configuration
     cors_origins: list[str] = [

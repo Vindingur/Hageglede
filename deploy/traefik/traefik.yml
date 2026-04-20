@@ -1,6 +1,7 @@
+# Static Traefik configuration
 api:
-  dashboard: false
-  insecure: false
+  dashboard: true
+  insecure: false  # Dashboard accessible via Traefik router
 
 entryPoints:
   web:
@@ -10,6 +11,7 @@ entryPoints:
         entryPoint:
           to: websecure
           scheme: https
+          permanent: true
   websecure:
     address: ":443"
 
@@ -22,16 +24,18 @@ certificatesResolvers:
         entryPoint: web
 
 providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: traefik
   file:
     directory: /etc/traefik/dynamic
     watch: true
 
 log:
   level: INFO
-  filePath: /var/log/traefik/traefik.log
 
-accessLog:
-  filePath: /var/log/traefik/access.log
+accessLog: {}
 
-experimental:
-  http3: true
+serversTransport:
+  insecureSkipVerify: true

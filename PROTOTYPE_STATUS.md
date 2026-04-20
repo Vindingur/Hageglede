@@ -1,68 +1,42 @@
-# Prototype Status
+# Hageglede Prototype Status
 
-## Current Phase
-**Planning Complete / Architecture Approved**
+## Project Overview
+**Current Phase:** Phase 2 - Core Feature Development
+**Last Updated:** 2025-04-19
 
-## Progress Summary
-- ✅ Project requirements defined (see `requirements.md`)
-- ✅ Architecture designed and approved (see `ARCHITECTURE.md`)
-- ✅ Tech stack selected: FastAPI + SQLite + HTMX
-- ✅ Roadmap updated for backend-first MVP (see `roadmap.md`)
-- ✅ Phase 1 scope defined and ready for implementation
+## Phase Status
 
-## Next Steps
-- Begin Phase 1 implementation:
-  1. Set up FastAPI project structure
-  2. Implement SQLite database with plant data schema
-  3. Create plant recommendation API endpoint
-  4. Build basic HTMX frontend for recommendations
-  5. Deploy initial MVP
+### Phase 0.5: External Data Pipeline ✅ COMPLETE
+- Artsdatabanken fetcher implemented
+- GBIF occurrence data integration
+- MET climate data pipeline
+- Data transformation and loading modules
+- Pipeline orchestration with scheduling
 
-## Key Decisions
-1. **Backend-first approach**: Using FastAPI instead of static site generator
-2. **Database**: SQLite for simplicity and local development
-3. **Frontend**: HTMX for server-rendered dynamic pages without complex JavaScript
-4. **Deployment**: Render/Railway compatible architecture
-5. **Testing**: Pytest for backend, htmx-driven frontend testing
+### Phase 1: Core API Skeleton ✅ COMPLETE
+- FastAPI application structure
+- Database configuration (SQLite + SQLAlchemy)
+- Plant models and CRUD operations
+- REST endpoints for plant management
+- CORS and middleware configured
 
-## Repository Structure
-```
-├── app/
-│   ├── main.py              # FastAPI application
-│   ├── database.py          # SQLite connection & models
-│   ├── routes/
-│   │   └── plants.py        # Plant recommendation endpoint
-│   └── templates/
-│       └── index.html       # HTMX frontend
-├── tests/
-│   └── test_recommendations.py
-├── requirements.txt
-├── roadmap.md
-├── ARCHITECTURE.md
-├── PROTOTYPE_STATUS.md
-└── README.md
-```
+### Phase 2: Core Feature Development 🔄 CURRENT
+**Status:** In Progress
+**Started:** 2025-04-19
 
-## Timeline
-- **Phase 1 (Current)**: Backend MVP (2-3 weeks)
-- **Phase 2**: Interactive UI & data collection (2-3 weeks)
-- **Phase 3**: Advanced features & optimization (3-4 weeks)
-- **Phase 4**: Production readiness (2 weeks)
+#### Tasks:
+- [ ] Plot CRUD operations
+- [ ] Hardiness zone integration
+- [ ] Planting calendar endpoints
+- [ ] User authentication (Phase 2.5)
 
-## Technical Constraints
-- Minimal external dependencies
-- Zero external API calls for core functionality
-- Mobile-first responsive design
-- Accessible WCAG 2.1 AA compliant
-- Performance: < 100ms response time for recommendations
-- Deployment: Single-container deployment ready
+## Overall Progress
+- **Completed:** 40%
+- **In Progress:** 30%
+- **Remaining:** 30%
 
 ## Blockers
-None - Ready to begin implementation.
+None
 
-## Notes
-The architecture shift from static site to FastAPI backend enables more sophisticated plant matching algorithms and future scalability while maintaining the simplicity and low-overhead goals of the project.
-
----
-
-*Last updated: $(date -I)*
+## Next Milestone
+Complete plot management endpoints and hardiness zone lookup

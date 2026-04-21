@@ -13,9 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.fetchers.gbif import GbifFetcher
-from scripts.transformers.plants import CropTransformer
-from scripts.transformers.climate import ZoneTransformer
-from scripts.transformers.weather import WeatherTransformer
+from scripts.transformers import transform_plant, transform_climate, transform_weather
 
 # Configure logging
 logging.basicConfig(
@@ -29,9 +27,6 @@ class Pipeline:
     def __init__(self, config_path: str = None):
         self.config_path = config_path
         self.fetcher = GbifFetcher()
-        self.crop_transformer = CropTransformer()
-        self.zone_transformer = ZoneTransformer()
-        self.weather_transformer = WeatherTransformer()
 
     async def run(self, query: str, limit: int = 50):
         """Run the complete pipeline for a given search query."""
@@ -48,22 +43,22 @@ class Pipeline:
             
             logger.info(f"Found {len(species_list)} species")
             
-            # 2. Process species data using CropTransformer
-            logger.info("Processing species data with CropTransformer...")
+            # 2. Process species data using transform_plant function
+            logger.info("Processing species data with plant transformer...")
             processed_species = []
             for species in species_list:
                 try:
-                    processed = self.crop_transformer.transform(species)
+                    processed = transform_plant(species)
                     processed_species.append(processed)
                 except Exception as e:
                     logger.warning(f"Failed to process species {species.get('canonical_name', 'unknown')}: {e}")
             
-            # 3. Process climate data using ZoneTransformer
-            logger.info("Processing climate data with ZoneTransformer...")
+            # 3. Process climate data using transform_climate function
+            logger.info("Processing climate data with climate transformer...")
             climate_results = []
             for species in processed_species:
                 try:
-                    zone_data = self.zone_transformer.transform(species)
+                    zone_data = transform_climate(species)
                     climate_results.append({
                         'species': species.get('canonical_name', 'unknown'),
                         'zone_data': zone_data
@@ -86,19 +81,19 @@ class Pipeline:
                                 'taxon_key': species['taxon_key'],
                                 'occurrences': occurrences
                             })
-                            # Process occurrences with WeatherTransformer
+                            # Process occurrences with transform_weather function
                             try:
-                                weather_enhanced = self.weather_transformer.transform(occurrences)
-                                logger.info(f"WeatherTransformer enhanced {len(weather_enhanced)} occurrences")
+                                weather_enhanced = transform_weather(occurrences)
+                                logger.info(f"Weather transformer enhanced {len(weather_enhanced)} occurrences")
                             except Exception as e:
-                                logger.warning(f"Failed to enhance occurrences with WeatherTransformer: {e}")
+                                logger.warning(f"Failed to enhance occurrences with weather transformer: {e}")
                     except Exception as e:
                         logger.warning(f"Failed to fetch occurrences for {species.get('canonical_name', 'unknown')}: {e}")
             
             logger.info(f"Pipeline completed successfully for query: '{query}'")
-            logger.info(f"- Processed {len(processed_species)} species using CropTransformer")
+            logger.info(f"- Processed {len(processed_species)} species using plant transformer")
             logger.info(f"- Found occurrence data for {len(occurrence_results)} species")
-            logger.info(f"- Generated zone data for {len(climate_results)} species using ZoneTransformer")
+            logger.info(f"- Generated zone data for {len(climate_results)} species using climate transformer")
             
             return {
                 'species': processed_species,

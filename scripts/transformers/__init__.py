@@ -4,4 +4,7 @@ This package contains transformers that convert raw API data into
 structured tables ready for SQLite loading.
 """
 
-__all__ = ["plants", "climate"]
+from scripts.transformers.plants import transform_plants
+from scripts.transformers.climate import transform_climate
+
+__all__ = ["transform_plants", "transform_climate"]

@@ -13,7 +13,9 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.fetchers.gbif import GbifFetcher
-from scripts.transformers import plants, climate
+from scripts.transformers.plants import CropTransformer
+from scripts.transformers.climate import ZoneTransformer
+from scripts.transformers.weather import WeatherTransformer
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +29,9 @@ class Pipeline:
     def __init__(self, config_path: str = None):
         self.config_path = config_path
         self.fetcher = GbifFetcher()
+        self.crop_transformer = CropTransformer()
+        self.zone_transformer = ZoneTransformer()
+        self.weather_transformer = WeatherTransformer()
 
     async def run(self, query: str, limit: int = 50):
         """Run the complete pipeline for a given search query."""
@@ -43,28 +48,28 @@ class Pipeline:
             
             logger.info(f"Found {len(species_list)} species")
             
-            # 2. Process species data using plants transformer
-            logger.info("Processing species data...")
+            # 2. Process species data using CropTransformer
+            logger.info("Processing species data with CropTransformer...")
             processed_species = []
             for species in species_list:
                 try:
-                    processed = plants.process_species(species)
+                    processed = self.crop_transformer.transform(species)
                     processed_species.append(processed)
                 except Exception as e:
                     logger.warning(f"Failed to process species {species.get('canonical_name', 'unknown')}: {e}")
             
-            # 3. Store results using climate transformer
-            logger.info("Storing climate data...")
-            storage_results = []
+            # 3. Process climate data using ZoneTransformer
+            logger.info("Processing climate data with ZoneTransformer...")
+            climate_results = []
             for species in processed_species:
                 try:
-                    climate_data = climate.process_climate_data(species)
-                    storage_results.append({
+                    zone_data = self.zone_transformer.transform(species)
+                    climate_results.append({
                         'species': species.get('canonical_name', 'unknown'),
-                        'climate_data': climate_data
+                        'zone_data': zone_data
                     })
                 except Exception as e:
-                    logger.warning(f"Failed to store climate data for {species.get('canonical_name', 'unknown')}: {e}")
+                    logger.warning(f"Failed to process climate data for {species.get('canonical_name', 'unknown')}: {e}")
             
             # 4. For each species, fetch occurrences
             logger.info("Fetching occurrences for each species...")
@@ -81,23 +86,24 @@ class Pipeline:
                                 'taxon_key': species['taxon_key'],
                                 'occurrences': occurrences
                             })
-                            # Enhance occurrences with climate data
+                            # Process occurrences with WeatherTransformer
                             try:
-                                climate.enhance_occurrences_with_climate(occurrences)
+                                weather_enhanced = self.weather_transformer.transform(occurrences)
+                                logger.info(f"WeatherTransformer enhanced {len(weather_enhanced)} occurrences")
                             except Exception as e:
-                                logger.warning(f"Failed to enhance occurrences with climate data: {e}")
+                                logger.warning(f"Failed to enhance occurrences with WeatherTransformer: {e}")
                     except Exception as e:
                         logger.warning(f"Failed to fetch occurrences for {species.get('canonical_name', 'unknown')}: {e}")
             
             logger.info(f"Pipeline completed successfully for query: '{query}'")
-            logger.info(f"- Processed {len(processed_species)} species")
+            logger.info(f"- Processed {len(processed_species)} species using CropTransformer")
             logger.info(f"- Found occurrence data for {len(occurrence_results)} species")
-            logger.info(f"- Generated climate data for {len(storage_results)} species")
+            logger.info(f"- Generated zone data for {len(climate_results)} species using ZoneTransformer")
             
             return {
                 'species': processed_species,
                 'occurrences': occurrence_results,
-                'climate_data': storage_results
+                'zone_data': climate_results
             }
             
         except Exception as e:

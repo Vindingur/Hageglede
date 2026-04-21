@@ -13,8 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.fetchers.gbif import GbifFetcher
-from scripts.processor import SpeciesProcessor
-from scripts.storage import SpeciesStorage
+from scripts.transformers import plants, climate
 
 # Configure logging
 logging.basicConfig(
@@ -28,8 +27,6 @@ class Pipeline:
     def __init__(self, config_path: str = None):
         self.config_path = config_path
         self.fetcher = GbifFetcher()
-        self.processor = SpeciesProcessor()
-        self.storage = SpeciesStorage()
 
     async def run(self, query: str, limit: int = 50):
         """Run the complete pipeline for a given search query."""
@@ -46,13 +43,28 @@ class Pipeline:
             
             logger.info(f"Found {len(species_list)} species")
             
-            # 2. Process species data
+            # 2. Process species data using plants transformer
             logger.info("Processing species data...")
-            processed_species = self.processor.process(species_list)
+            processed_species = []
+            for species in species_list:
+                try:
+                    processed = plants.process_species(species)
+                    processed_species.append(processed)
+                except Exception as e:
+                    logger.warning(f"Failed to process species {species.get('canonical_name', 'unknown')}: {e}")
             
-            # 3. Store results
-            logger.info("Storing results...")
-            storage_results = await self.storage.store(processed_species)
+            # 3. Store results using climate transformer
+            logger.info("Storing climate data...")
+            storage_results = []
+            for species in processed_species:
+                try:
+                    climate_data = climate.process_climate_data(species)
+                    storage_results.append({
+                        'species': species.get('canonical_name', 'unknown'),
+                        'climate_data': climate_data
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to store climate data for {species.get('canonical_name', 'unknown')}: {e}")
             
             # 4. For each species, fetch occurrences
             logger.info("Fetching occurrences for each species...")
@@ -69,19 +81,23 @@ class Pipeline:
                                 'taxon_key': species['taxon_key'],
                                 'occurrences': occurrences
                             })
-                            # Store occurrences
-                            await self.storage.store_occurrences(species['canonical_name'], occurrences)
+                            # Enhance occurrences with climate data
+                            try:
+                                climate.enhance_occurrences_with_climate(occurrences)
+                            except Exception as e:
+                                logger.warning(f"Failed to enhance occurrences with climate data: {e}")
                     except Exception as e:
                         logger.warning(f"Failed to fetch occurrences for {species.get('canonical_name', 'unknown')}: {e}")
             
             logger.info(f"Pipeline completed successfully for query: '{query}'")
             logger.info(f"- Processed {len(processed_species)} species")
             logger.info(f"- Found occurrence data for {len(occurrence_results)} species")
+            logger.info(f"- Generated climate data for {len(storage_results)} species")
             
             return {
                 'species': processed_species,
                 'occurrences': occurrence_results,
-                'storage': storage_results
+                'climate_data': storage_results
             }
             
         except Exception as e:

@@ -5,6 +5,6 @@ structured tables ready for SQLite loading.
 """
 
 from scripts.transformers.plants import transform_plants
-from scripts.transformers.climate import transform_climate
+from scripts.transformers.climate import transform_weather
 
-__all__ = ["transform_plants", "transform_climate"]
+__all__ = ["transform_plants", "transform_weather"]

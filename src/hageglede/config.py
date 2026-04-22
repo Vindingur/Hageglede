@@ -15,6 +15,7 @@ class SourceConfig(BaseModel):
     name: str
     type: SourceType
     env_key: Optional[str] = None
+    api_secret: Optional[str] = None
     base_url: Optional[str] = None
     description: Optional[str] = None
 
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
             name="GBIF",
             type=SourceType.API,
             env_key="GBIF_USERNAME",
+            api_secret="GBIF_PASSWORD",
             base_url="https://api.gbif.org/v1",
             description="Global Biodiversity Information Facility API"
         ),
@@ -53,6 +55,7 @@ class Settings(BaseSettings):
             name="MET",
             type=SourceType.API,
             env_key="MET_CLIENT_ID",
+            api_secret="MET_CLIENT_SECRET",
             base_url="https://frost.met.no",
             description="Norwegian Meteorological Institute API"
         )

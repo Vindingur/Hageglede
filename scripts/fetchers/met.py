@@ -1,408 +1,284 @@
 #!/usr/bin/env python3
 """
-MET Frost API client for fetching climate and weather zone data.
+Fetches MET data from the Norwegian Meteorological Institute's API
+using MET_CLIENT_ID stored in environment variables via config module.
 
-Fetches climate data from MET Norway's Frost API including:
-- Daily temperature data
-- Precipitation data
-- Weather station metadata
-- Climate zones data
+This script downloads MET data from their API by performing the following steps:
 
-Requires MET Frost API client ID (available from frost.met.no)
+1. Authentication via client ID (stored as environment variable MET_CLIENT_ID)
+2. Fetching timeseries data for specified locations and parameters
+3. Storing the raw response as JSON files in the data directory (DATA_DIR)
+   and also a parquet file for tabular data
+
+Usage:
+    python3 met.py --location <location_id> --element <element_id>
+
+Examples:
+    python3 met.py --location SN18700 --element air_temperature
+    python3 met.py --location SN18700 --element wind_speed
 """
+
+import argparse
+import json
 import os
 import sys
-import json
-import time
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+import pandas as pd
 import requests
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
 
-# Add parent directory to path for config import
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
+# Import configuration from the config module
+sys.path.append(str(Path(__file__).parent.parent.parent))
+try:
+    from config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
+except ImportError as e:
+    print(f"Error importing config: {e}")
+    print("Please ensure MET_CLIENT_ID, DATA_DIR, and CACHE_DIR are defined in config.py")
+    print("and the environment variable MET_CLIENT_ID is set.")
+    sys.exit(1)
 
-logger = logging.getLogger(__name__)
+def authenticate():
+    """
+    Authenticate with MET API using client ID from environment variable.
 
-class METFetcher:
-    """Fetch climate data from MET Norway's Frost API."""
-    
-    BASE_URL = "https://frost.met.no"
-    
-    def __init__(self, client_id: str = None):
-        """Initialize MET Frost API fetcher.
-        
-        Args:
-            client_id: MET Frost API client ID. If None, reads from config.
-        """
-        self.client_id = client_id or MET_CLIENT_ID
-        if not self.client_id:
-            raise ValueError("MET_CLIENT_ID not configured. Get one from frost.met.no")
-        
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "hageglede-data-pipeline/1.0"
-        })
-        
-        # Cache directory for MET data
-        self.cache_dir = os.path.join(CACHE_DIR, "met")
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
-        logger.info("METFetcher initialized with client ID: %s", self.client_id[:8] + "...")
-    
-    def _make_request(self, endpoint: str, params: Dict = None) -> Dict:
-        """Make authenticated request to Frost API.
-        
-        Args:
-            endpoint: API endpoint (without base URL)
-            params: Query parameters
-            
-        Returns:
-            JSON response as dictionary
-            
-        Raises:
-            requests.exceptions.RequestException: On HTTP error
-            ValueError: If API returns error
-        """
-        url = f"{self.BASE_URL}{endpoint}"
-        params = params or {}
-        params["client_id"] = self.client_id
-        
-        try:
-            response = self.session.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Frost API returns data in "data" field
-            if "data" not in data:
-                logger.warning("No 'data' field in MET response: %s", data)
-                return {"data": []}
-            
-            return data
-            
-        except requests.exceptions.RequestException as e:
-            logger.error("MET API request failed: %s", e)
-            raise
-        except json.JSONDecodeError as e:
-            logger.error("Failed to parse MET API response: %s", e)
-            raise
-    
-    def get_stations(self, country: str = "NO") -> List[Dict]:
-        """Get weather stations for a country.
-        
-        Args:
-            country: Country code (default: "NO" for Norway)
-            
-        Returns:
-            List of station metadata dictionaries
-        """
-        logger.info("Fetching MET stations for country: %s", country)
-        
-        # Cache station data for 7 days
-        cache_file = os.path.join(self.cache_dir, f"stations_{country}.json")
-        if os.path.exists(cache_file):
-            file_age = time.time() - os.path.getmtime(cache_file)
-            if file_age < 7 * 24 * 3600:  # 7 days
-                logger.info("Loading stations from cache")
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        
-        try:
-            params = {
-                "country": country,
-                "types": "SensorSystem",
-                "fields": "id,name,geometry,masl,municipality,county,stationOwner",
-                "limit": 1000
-            }
-            
-            data = self._make_request("/sources/v0.jsonld", params)
-            stations = data.get("data", [])
-            
-            logger.info("Found %d MET stations", len(stations))
-            
-            # Cache the result
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(stations, f, indent=2, ensure_ascii=False)
-            
-            return stations
-            
-        except Exception as e:
-            logger.error("Failed to fetch MET stations: %s", e)
-            return []
-    
-    def get_climate_zones(self) -> List[Dict]:
-        """Get climate zone definitions for Norway.
-        
-        Returns:
-            List of climate zone definitions
-        """
-        logger.info("Fetching climate zone definitions")
-        
-        cache_file = os.path.join(self.cache_dir, "climate_zones.json")
-        if os.path.exists(cache_file):
-            logger.info("Loading climate zones from cache")
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        
-        # MET doesn't have a dedicated climate zones API, so we'll create
-        # a simplified model based on temperature data
-        try:
-            # Get stations with long-term temperature records
-            params = {
-                "country": "NO",
-                "elementids": "mean(air_temperature P1D)",
-                "timeoffsets": "PT0H",
-                "levels": "2",
-                "limit": 50
-            }
-            
-            data = self._make_request("/sources/v0.jsonld", params)
-            stations = data.get("data", [])
-            
-            # Create climate zones based on altitude and location
-            climate_zones = []
-            for station in stations:
-                zone = {
-                    "station_id": station.get("id"),
-                    "name": station.get("name"),
-                    "county": station.get("county"),
-                    "municipality": station.get("municipality"),
-                    "altitude": station.get("masl", 0),
-                    "geometry": station.get("geometry"),
-                    "climate_zone": self._classify_climate_zone(
-                        station.get("county", ""),
-                        station.get("masl", 0)
-                    ),
-                    "source": "MET Frost API"
-                }
-                climate_zones.append(zone)
-            
-            logger.info("Created %d climate zone definitions", len(climate_zones))
-            
-            # Cache the result
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(climate_zones, f, indent=2, ensure_ascii=False)
-            
-            return climate_zones
-            
-        except Exception as e:
-            logger.error("Failed to create climate zones: %s", e)
-            return []
-    
-    def _classify_climate_zone(self, county: str, altitude: float) -> str:
-        """Classify climate zone based on county and altitude.
-        
-        Args:
-            county: County name
-            altitude: Altitude in meters
-            
-        Returns:
-            Climate zone classification
-        """
-        # Simplified climate zone classification for Norway
-        if altitude > 600:
-            return "alpine"
-        elif altitude > 300:
-            return "subalpine"
-        
-        # Coastal vs inland classification
-        coastal_counties = ["Møre og Romsdal", "Vestland", "Rogaland", "Agder", "Vestfold og Telemark"]
-        if county in coastal_counties:
-            return "coastal_mild"
+    Returns:
+        tuple: (auth_header, client_id) or (None, None) if authentication fails
+    """
+    if not MET_CLIENT_ID:
+        print("ERROR: MET_CLIENT_ID environment variable is not set.")
+        print("Please set MET_CLIENT_ID with your MET API client ID.")
+        return None, None
+
+    # MET API uses client ID in the header for authentication
+    auth_header = {"X-Client-ID": MET_CLIENT_ID}
+
+    # Optional test request to verify authentication
+    test_url = "https://frost.met.no/sources/v0.jsonld?types=SensorSystem&country=NO&county=Troms og Finnmark"
+    try:
+        response = requests.get(test_url, headers=auth_header, timeout=10)
+        if response.status_code == 200:
+            print(f"✓ Authentication successful with client ID: {MET_CLIENT_ID[:8]}...")
+            return auth_header, MET_CLIENT_ID
         else:
-            return "inland_continental"
-    
-    def get_weather_data(self, station_id: str, 
-                        element_id: str = "mean(air_temperature P1D)",
-                        time_range: str = "latest") -> List[Dict]:
-        """Get weather observations for a specific station.
-        
-        Args:
-            station_id: MET station ID
-            element_id: Weather element ID (default: daily mean temperature)
-            time_range: Time range in ISO format or "latest"
-            
-        Returns:
-            List of observation records
-        """
-        logger.info("Fetching weather data for station %s, element %s", 
-                   station_id, element_id)
-        
-        # Create cache key
-        cache_key = f"{station_id}_{element_id}_{time_range}"
-        cache_file = os.path.join(self.cache_dir, f"weather_{cache_key}.json")
-        
-        if os.path.exists(cache_file):
-            file_age = time.time() - os.path.getmtime(cache_file)
-            if file_age < 24 * 3600:  # 24 hours
-                logger.info("Loading weather data from cache")
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        
-        try:
-            params = {
-                "sources": station_id,
-                "elements": element_id,
-                "referencetime": time_range,
-                "limit": 1000
-            }
-            
-            data = self._make_request("/observations/v0.jsonld", params)
-            observations = data.get("data", [])
-            
-            # Extract relevant data
-            weather_data = []
-            for obs in observations:
-                reference_time = obs.get("referenceTime")
-                measurements = obs.get("observations", [])
-                
-                for measurement in measurements:
-                    weather_data.append({
-                        "station_id": station_id,
-                        "reference_time": reference_time,
-                        "element_id": measurement.get("elementId"),
-                        "value": measurement.get("value"),
-                        "unit": measurement.get("unit"),
-                        "time_offset": measurement.get("timeOffset"),
-                        "time_resolution": measurement.get("timeResolution"),
-                        "level": measurement.get("level")
-                    })
-            
-            logger.info("Found %d weather observations", len(weather_data))
-            
-            # Cache the result
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(weather_data, f, indent=2, ensure_ascii=False)
-            
-            return weather_data
-            
-        except Exception as e:
-            logger.error("Failed to fetch weather data: %s", e)
-            return []
-    
-    def get_daily_temperatures(self, station_ids: List[str] = None,
-                              days_back: int = 30) -> List[Dict]:
-        """Get daily temperature data for multiple stations.
-        
-        Args:
-            station_ids: List of station IDs. If None, uses stations from major cities.
-            days_back: Number of days back to fetch data for
-            
-        Returns:
-            List of daily temperature records
-        """
-        if station_ids is None:
-            # Default to major Norwegian cities
-            station_ids = ["SN18700", "SN50540", "SN90450"]  # Oslo, Bergen, Trondheim
-        
-        logger.info("Fetching daily temperatures for %d stations, last %d days",
-                   len(station_ids), days_back)
-        
-        all_temperatures = []
-        
-        for station_id in station_ids:
-            # Calculate date range
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days_back)
-            
-            time_range = f"{start_date.date()}/{end_date.date()}"
-            
-            temperatures = self.get_weather_data(
-                station_id=station_id,
-                element_id="mean(air_temperature P1D)",
-                time_range=time_range
-            )
-            
-            all_temperatures.extend(temperatures)
-        
-        logger.info("Total daily temperature records: %d", len(all_temperatures))
-        return all_temperatures
-    
-    def save_raw_data(self) -> str:
-        """Fetch and save all MET data to raw data directory.
-        
-        Returns:
-            Path to saved data file
-        """
-        logger.info("Starting MET data collection")
-        
-        # Create output directory
-        output_dir = os.path.join(DATA_DIR, "raw", "met")
-        os.makedirs(output_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = os.path.join(output_dir, f"met_data_{timestamp}.json")
-        
-        # Collect all data
-        data = {
-            "metadata": {
-                "source": "MET Norway Frost API",
-                "fetched_at": datetime.now().isoformat(),
-                "client_id_prefix": self.client_id[:8] if self.client_id else None
-            },
-            "stations": self.get_stations(),
-            "climate_zones": self.get_climate_zones(),
-            "daily_temperatures": self.get_daily_temperatures()
-        }
-        
-        # Save to file
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        
-        logger.info("MET data saved to: %s", output_file)
-        return output_file
+            print(f"✗ Authentication failed with status code: {response.status_code}")
+            print(f"Response: {response.text[:200]}")
+            return None, None
+    except requests.exceptions.RequestException as e:
+        print(f"✗ Authentication request failed: {e}")
+        return None, None
 
+def fetch_met_data(location_id, element_id, auth_header):
+    """
+    Fetch MET timeseries data for a specific location and element.
+
+    Args:
+        location_id (str): MET location/source ID (e.g., 'SN18700')
+        element_id (str): Element/parameter ID (e.g., 'air_temperature')
+        auth_header (dict): Authentication header with client ID
+
+    Returns:
+        dict: JSON response from MET API or None if request fails
+    """
+    base_url = "https://frost.met.no/observations/v0.jsonld"
+
+    # Date range: last 7 days including today
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=7)
+
+    params = {
+        "sources": location_id,
+        "elements": element_id,
+        "referencetime": f"{start_date.date()}/{end_date.date()}",
+        "timeoffsets": "PT0H",  # No time offset
+        "timeresolutions": "PT1H",  # Hourly resolution
+        "performancecategories": "C",  # Controlled quality only
+        "exposurecategories": "1",  # Open area
+        "levels": "0",
+        "fields": "sourceId,referenceTime,elementId,value,unit,timeOffset,timeResolution"
+    }
+
+    print(f"Fetching MET data for location '{location_id}', element '{element_id}'...")
+    print(f"Date range: {start_date.date()} to {end_date.date()}")
+
+    try:
+        response = requests.get(base_url, headers=auth_header, params=params, timeout=30)
+        print(f"Response status: {response.status_code}")
+
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✓ Successfully fetched {len(data.get('data', []))} observations")
+            return data
+        elif response.status_code == 429:
+            print("✗ Rate limit exceeded. Please wait and try again later.")
+            return None
+        elif response.status_code == 401:
+            print("✗ Authentication failed. Check your MET_CLIENT_ID.")
+            return None
+        else:
+            print(f"✗ Request failed with status {response.status_code}: {response.text[:200]}")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        print(f"✗ Request failed: {e}")
+        return None
+
+def save_raw_response(data, location_id, element_id):
+    """
+    Save raw JSON response to data directory.
+
+    Args:
+        data (dict): JSON response from MET API
+        location_id (str): Location identifier
+        element_id (str): Element identifier
+
+    Returns:
+        Path: Path to saved JSON file
+    """
+    # Ensure data directory exists
+    raw_data_dir = Path(DATA_DIR) / "raw" / "met"
+    raw_data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"met_{location_id}_{element_id}_{timestamp}.json"
+    filepath = raw_data_dir / filename
+
+    # Save JSON file
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    print(f"✓ Raw data saved to: {filepath}")
+    return filepath
+
+def parse_to_dataframe(data):
+    """
+    Parse MET JSON response into a pandas DataFrame.
+
+    Args:
+        data (dict): JSON response from MET API
+
+    Returns:
+        pd.DataFrame: Parsed data or empty DataFrame if parsing fails
+    """
+    if not data or 'data' not in data:
+        return pd.DataFrame()
+
+    records = []
+    for observation in data.get('data', []):
+        source_id = observation.get('sourceId')
+        reference_time = observation.get('referenceTime')
+        element_id = observation.get('elementId')
+
+        for obs_value in observation.get('observations', []):
+            record = {
+                'sourceId': source_id,
+                'referenceTime': reference_time,
+                'elementId': element_id,
+                'value': obs_value.get('value'),
+                'unit': obs_value.get('unit'),
+                'timeOffset': obs_value.get('timeOffset'),
+                'timeResolution': obs_value.get('timeResolution'),
+                'level': obs_value.get('level'),
+                'fetch_timestamp': datetime.now().isoformat()
+            }
+            records.append(record)
+
+    if records:
+        df = pd.DataFrame(records)
+        # Convert referenceTime to datetime
+        df['referenceTime'] = pd.to_datetime(df['referenceTime'])
+        # Add human-readable columns
+        df['date'] = df['referenceTime'].dt.date
+        df['hour'] = df['referenceTime'].dt.hour
+        return df
+    else:
+        return pd.DataFrame()
+
+def save_as_parquet(df, location_id, element_id):
+    """
+    Save parsed data as parquet file.
+
+    Args:
+        df (pd.DataFrame): Parsed data
+        location_id (str): Location identifier
+        element_id (str): Element identifier
+
+    Returns:
+        Path: Path to saved parquet file or None if DataFrame is empty
+    """
+    if df.empty:
+        return None
+
+    # Ensure cache directory exists
+    cache_dir = Path(CACHE_DIR) / "met"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create filename with date range
+    min_date = df['date'].min()
+    max_date = df['date'].max()
+    filename = f"met_{location_id}_{element_id}_{min_date}_{max_date}.parquet"
+    filepath = cache_dir / filename
+
+    # Save parquet file
+    df.to_parquet(filepath, index=False)
+
+    print(f"✓ Parquet file saved to: {filepath}")
+    print(f"  Shape: {df.shape}, Columns: {list(df.columns)}")
+    return filepath
 
 def main():
-    """Command-line interface for MET fetcher."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Fetch climate data from MET Frost API")
-    parser.add_argument("--stations", action="store_true", help="Fetch station data")
-    parser.add_argument("--zones", action="store_true", help="Fetch climate zones")
-    parser.add_argument("--weather", action="store_true", help="Fetch weather data")
-    parser.add_argument("--all", action="store_true", help="Fetch all data")
-    parser.add_argument("--save", action="store_true", help="Save data to raw directory")
-    
+    """Main function to fetch and process MET data."""
+    parser = argparse.ArgumentParser(description="Fetch MET data from Norwegian Meteorological Institute")
+    parser.add_argument("--location", "-l", required=True,
+                        help="Location/source ID (e.g., SN18700)")
+    parser.add_argument("--element", "-e", required=True,
+                        help="Element/parameter ID (e.g., air_temperature, wind_speed)")
+    parser.add_argument("--test-auth", action="store_true",
+                        help="Test authentication only, don't fetch data")
+
     args = parser.parse_args()
-    
-    # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    try:
-        fetcher = METFetcher()
-        
-        if args.stations or args.all:
-            stations = fetcher.get_stations()
-            print(f"Found {len(stations)} stations")
-            if stations:
-                print("Sample station:", json.dumps(stations[0], indent=2, ensure_ascii=False))
-        
-        if args.zones or args.all:
-            zones = fetcher.get_climate_zones()
-            print(f"Created {len(zones)} climate zones")
-            if zones:
-                print("Sample zone:", json.dumps(zones[0], indent=2, ensure_ascii=False))
-        
-        if args.weather or args.all:
-            temps = fetcher.get_daily_temperatures(days_back=7)
-            print(f"Found {len(temps)} temperature records")
-            if temps:
-                print("Sample temperature:", json.dumps(temps[0], indent=2, ensure_ascii=False))
-        
-        if args.save or args.all:
-            output_file = fetcher.save_raw_data()
-            print(f"Data saved to: {output_file}")
-            
-    except Exception as e:
-        logger.error("MET fetcher failed: %s", e)
+
+    print("=" * 60)
+    print("MET Data Fetcher")
+    print("=" * 60)
+
+    # Authenticate
+    auth_header, client_id = authenticate()
+    if not auth_header:
         sys.exit(1)
 
+    if args.test_auth:
+        print("✓ Authentication test passed")
+        sys.exit(0)
+
+    # Fetch data
+    data = fetch_met_data(args.location, args.element, auth_header)
+    if not data:
+        print("✗ Failed to fetch data")
+        sys.exit(1)
+
+    # Save raw response
+    json_path = save_raw_response(data, args.location, args.element)
+
+    # Parse to DataFrame
+    df = parse_to_dataframe(data)
+    if df.empty:
+        print("⚠ No observations found in response")
+        sys.exit(0)
+
+    print(f"✓ Parsed {len(df)} observations")
+
+    # Save as parquet
+    parquet_path = save_as_parquet(df, args.location, args.element)
+
+    print("=" * 60)
+    print("✓ MET data fetch completed successfully!")
+    if json_path:
+        print(f"  Raw JSON: {json_path}")
+    if parquet_path:
+        print(f"  Parquet: {parquet_path}")
+    print("=" * 60)
 
 if __name__ == "__main__":
     main()

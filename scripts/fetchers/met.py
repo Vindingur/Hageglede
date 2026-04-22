@@ -30,15 +30,15 @@ from pathlib import Path
 
 # Import configuration from the config module using relative import
 try:
-    from ..config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
+    from ..config import get_source, DATA_DIR, CACHE_DIR
 except ImportError:
     # Fallback for direct execution
     sys.path.append(str(Path(__file__).parent.parent.parent))
     try:
-        from config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
+        from config import get_source, DATA_DIR, CACHE_DIR
     except ImportError as e:
         print(f"Error importing config: {e}")
-        print("Please ensure MET_CLIENT_ID, DATA_DIR, and CACHE_DIR are defined in config.py")
+        print("Please ensure get_source, DATA_DIR, and CACHE_DIR are defined in config.py")
         print("and the environment variable MET_CLIENT_ID is set.")
         sys.exit(1)
 
@@ -49,21 +49,29 @@ def authenticate():
     Returns:
         tuple: (auth_header, client_id) or (None, None) if authentication fails
     """
-    if not MET_CLIENT_ID:
+    # Get MET source configuration
+    met_source = get_source('MET')
+    if not met_source:
+        print("ERROR: MET source configuration not found in config.")
+        print("Please ensure MET is defined in SourceConfig with env_key='MET_CLIENT_ID'.")
+        return None, None
+    
+    met_client_id = met_source.env_key
+    if not met_client_id:
         print("ERROR: MET_CLIENT_ID environment variable is not set.")
         print("Please set MET_CLIENT_ID with your MET API client ID.")
         return None, None
 
     # MET API uses client ID in the header for authentication
-    auth_header = {"X-Client-ID": MET_CLIENT_ID}
+    auth_header = {"X-Client-ID": met_client_id}
 
     # Optional test request to verify authentication
     test_url = "https://frost.met.no/sources/v0.jsonld?types=SensorSystem&country=NO&county=Troms og Finnmark"
     try:
         response = requests.get(test_url, headers=auth_header, timeout=10)
         if response.status_code == 200:
-            print(f"✓ Authentication successful with client ID: {MET_CLIENT_ID[:8]}...")
-            return auth_header, MET_CLIENT_ID
+            print(f"✓ Authentication successful with client ID: {met_client_id[:8]}...")
+            return auth_header, met_client_id
         else:
             print(f"✗ Authentication failed with status code: {response.status_code}")
             print(f"Response: {response.text[:200]}")
@@ -84,7 +92,10 @@ def fetch_met_data(location_id, element_id, auth_header):
     Returns:
         dict: JSON response from MET API or None if request fails
     """
-    base_url = "https://frost.met.no/observations/v0.jsonld"
+    # Get MET base URL from configuration
+    met_source = get_source('MET')
+    base_url = met_source.base_url if met_source else "https://frost.met.no"
+    observations_url = f"{base_url}/observations/v0.jsonld"
 
     # Date range: last 7 days including today
     end_date = datetime.now()
@@ -106,7 +117,7 @@ def fetch_met_data(location_id, element_id, auth_header):
     print(f"Date range: {start_date.date()} to {end_date.date()}")
 
     try:
-        response = requests.get(base_url, headers=auth_header, params=params, timeout=30)
+        response = requests.get(observations_url, headers=auth_header, params=params, timeout=30)
         print(f"Response status: {response.status_code}")
 
         if response.status_code == 200:

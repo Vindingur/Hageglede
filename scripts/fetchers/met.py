@@ -28,15 +28,19 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Import configuration from the config module
-sys.path.append(str(Path(__file__).parent.parent.parent))
+# Import configuration from the config module using relative import
 try:
-    from config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
-except ImportError as e:
-    print(f"Error importing config: {e}")
-    print("Please ensure MET_CLIENT_ID, DATA_DIR, and CACHE_DIR are defined in config.py")
-    print("and the environment variable MET_CLIENT_ID is set.")
-    sys.exit(1)
+    from ..config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
+except ImportError:
+    # Fallback for direct execution
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+    try:
+        from config import MET_CLIENT_ID, DATA_DIR, CACHE_DIR
+    except ImportError as e:
+        print(f"Error importing config: {e}")
+        print("Please ensure MET_CLIENT_ID, DATA_DIR, and CACHE_DIR are defined in config.py")
+        print("and the environment variable MET_CLIENT_ID is set.")
+        sys.exit(1)
 
 def authenticate():
     """

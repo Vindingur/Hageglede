@@ -15,15 +15,15 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
-# Local imports
-from scripts.fetchers.gbif import GbifFetcher
-from scripts.fetchers.met import METFetcher
-from scripts.fetchers.artsdatabanken import ArtsdatabankenFetcher
-from scripts.transformers.plants import transform_gbif_occurrences, transform_artsdatabanken_data
-from scripts.transformers.climate import transform_met_weather_data
-from scripts.loaders.plant_loader import load_plant_data
-from scripts.loaders.weather_loader import load_weather_data
-from scripts.config import (
+# Local imports - use absolute imports within the scripts package
+from .fetchers.gbif import GbifFetcher
+from .fetchers.met import METFetcher
+from .fetchers.artsdatabanken import ArtsdatabankenFetcher
+from .transformers.plants import transform_gbif_occurrences, transform_artsdatabanken_data
+from .transformers.climate import transform_met_weather_data
+from .loaders.plant_loader import load_plant_data
+from .loaders.weather_loader import load_weather_data
+from .config import (
     DATABASE_PATH,
     LOGGING_CONFIG,
     GBIF_API_CONFIG,

@@ -87,6 +87,12 @@ class ConfigManager:
                 source_type=SourceType.OPENSTREETMAP,
                 url="https://overpass-api.de/api/interpreter",
                 rate_limit=1.0
+            ),
+            SourceConfig(
+                name="MET",
+                source_type=SourceType.SIV,
+                url="https://frost.met.no",
+                rate_limit=1.0
             )
         ]
         
@@ -168,6 +174,22 @@ class ConfigManager:
             api_key = os.getenv(env_key)
             if api_key:
                 source.api_key = api_key
+        
+        # MET client ID and secret
+        met_client_id = os.getenv('MET_CLIENT_ID')
+        met_client_secret = os.getenv('MET_CLIENT_SECRET')
+        
+        if met_client_id and met_client_secret:
+            # Set MET credentials as a composite API key or parameters
+            met_source = self.get_source("MET")
+            if met_source:
+                met_source.params = {
+                    "client_id": met_client_id,
+                    "client_secret": met_client_secret
+                }
+                # For OAuth2 flow, we might need both ID and secret
+                # Use a special format for authentication
+                met_source.api_key = f"{met_client_id}:{met_client_secret}"
         
         # Pipeline settings
         log_level = os.getenv('LOG_LEVEL')

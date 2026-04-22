@@ -275,75 +275,45 @@ def load_config(config_path: Optional[str] = None) -> PipelineConfig:
     return manager.load()
 
 
-# Backward-compatible module-level exports for pipeline.py and other imports
-
-# Database configuration
+# Backward-compatible module-level exports for pipeline.py
 DATABASE_PATH = config.database.path
-
-# Logging configuration (dictionary format for compatibility)
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "standard": {
-            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         }
     },
     "handlers": {
-        "default": {
-            "level": config.log_level,
-            "formatter": "standard",
+        "console": {
             "class": "logging.StreamHandler",
-            "stream": "ext://sys.stdout"
+            "formatter": "standard"
         }
     },
-    "loggers": {
-        "": {
-            "handlers": ["default"],
-            "level": config.log_level,
-            "propagate": True
-        }
+    "root": {
+        "handlers": ["console"],
+        "level": config.log_level
     }
 }
 
-# GBIF retry configuration (default values)
+# GBIF retry configuration
 GBIF_RETRY_CONFIG = {
-    "max_retries": 3,
-    "backoff_factor": 1.0,
-    "status_forcelist": [408, 429, 500, 502, 503, 504]
+    "retries": 3,
+    "backoff_factor": 2,
+    "status_forcelist": [429, 500, 502, 503, 504],
+    "allowed_methods": ["GET"]
 }
 
-# Frost (MET) configuration
-def get_frost_config():
-    """Get FROST configuration from MET source if available."""
-    met_source = _config_manager.get_source("MET")
-    if met_source and met_source.url:
-        return {
-            "base_url": met_source.url,
-            "client_id": met_source.params.get("client_id") if met_source.params else "",
-            "client_secret": met_source.params.get("client_secret") if met_source.params else "",
-            "auth": met_source.api_key,
-            "timeout": met_source.timeout,
-            "retries": met_source.retries
-        }
-    return {
-        "base_url": "https://frost.met.no",
-        "client_id": "",
-        "client_secret": "",
-        "auth": "",
-        "timeout": 30,
-        "retries": 3
-    }
+# FROST API configuration
+FROST_CONFIG = {
+    "base_url": "https://frost.met.no",
+    "timeout": 30
+}
 
-FROST_CONFIG = get_frost_config()
+# MET client ID from environment
+MET_CLIENT_ID = os.getenv('MET_CLIENT_ID', '')
 
-# MET client ID (legacy compatibility)
-MET_CLIENT_ID = FROST_CONFIG.get("client_id", "")
-
-# Directory configurations
+# Directory paths
 CACHE_DIR = config.cache_dir
-DATA_DIR = os.path.dirname(config.database.path) if config.database.path else "data"
-
-# Additional constants for backward compatibility
-MAX_WORKERS = config.max_workers
-BATCH_SIZE = config.batch_size
+DATA_DIR = Path(config.database.path).parent.absolute()

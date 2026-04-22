@@ -273,3 +273,47 @@ def load_config(config_path: Optional[str] = None) -> PipelineConfig:
     """
     manager = ConfigManager(config_path)
     return manager.load()
+
+
+# Backward-compatible module-level exports for pipeline.py
+DATABASE_PATH = config.database.path
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard"
+        }
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": config.log_level
+    }
+}
+
+# GBIF retry configuration
+GBIF_RETRY_CONFIG = {
+    "retries": 3,
+    "backoff_factor": 2,
+    "status_forcelist": [429, 500, 502, 503, 504],
+    "allowed_methods": ["GET"]
+}
+
+# FROST API configuration
+FROST_CONFIG = {
+    "base_url": "https://frost.met.no",
+    "timeout": 30
+}
+
+# MET client ID from environment
+MET_CLIENT_ID = os.getenv('MET_CLIENT_ID', '')
+
+# Directory paths
+CACHE_DIR = config.cache_dir
+DATA_DIR = Path(config.database.path).parent.absolute()

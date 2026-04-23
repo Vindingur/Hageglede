@@ -20,7 +20,7 @@ from scripts.fetchers.gbif import GbifFetcher
 from scripts.fetchers.met import METFetcher
 from scripts.fetchers.artsdatabanken import ArtsdatabankenFetcher
 from scripts.transformers.plants import transform_gbif_occurrences, transform_artsdatabanken_data
-from scripts.transformers.climate import transform_met_weather_data
+from scripts.transformers.climate import transform_met_climate_data
 from scripts.loaders.plant_loader import load_plant_data
 from scripts.loaders.weather_loader import load_weather_data
 from scripts.config import (
@@ -164,7 +164,7 @@ async def run_pipeline(config_path="config/pipeline_config.json"):
         # Transform MET weather data
         if met_data:
             try:
-                weather_df = transform_met_weather_data(met_data)
+                weather_df = transform_met_climate_data(met_data)
                 logger.info(f"Transformed MET weather data: {len(weather_df) if weather_df is not None else 0} rows")
             except Exception as e:
                 logger.error(f"Failed to transform MET weather data: {e}")

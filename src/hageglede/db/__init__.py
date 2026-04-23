@@ -1,17 +1,20 @@
 """Database package for unified gardening.db."""
 
-from .schema import Base, Plant, Weather, Task, GardenBed, Harvest, Pesticide, Fertilizer
+from .schema import Base, Plant, ClimateZone, WeatherStation, WeatherObservation, CalendarEntry, Plot, Planting, Recommendation, GardenNote, create_all_tables
 from .session import engine, SessionLocal, get_db
 
 __all__ = [
     "Base",
     "Plant",
-    "Weather", 
-    "Task",
-    "GardenBed",
-    "Harvest",
-    "Pesticide",
-    "Fertilizer",
+    "ClimateZone",
+    "WeatherStation", 
+    "WeatherObservation",
+    "CalendarEntry",
+    "Plot",
+    "Planting",
+    "Recommendation",
+    "GardenNote",
+    "create_all_tables",
     "engine",
     "SessionLocal",
     "get_db",

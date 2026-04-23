@@ -147,6 +147,72 @@ def transform_climate_zones(raw_zones: List[Dict]) -> pd.DataFrame:
     return df
 
 
+def transform_weather(raw_data: List[Dict]) -> pd.DataFrame:
+    """
+    Transform general weather data into normalized schema.
+    
+    Args:
+        raw_data: List of weather observations from various sources
+        
+    Returns:
+        DataFrame with columns:
+        - location_id: Location identifier
+        - location_name: Location name
+        - latitude: Location latitude
+        - longitude: Location longitude
+        - timestamp: Observation timestamp
+        - temperature: Temperature in Celsius
+        - humidity: Relative humidity percentage
+        - precipitation: Precipitation amount in mm
+        - wind_speed: Wind speed in m/s
+        - wind_direction: Wind direction in degrees
+        - pressure: Atmospheric pressure in hPa
+        - conditions: Weather conditions description
+        - source: Data source identifier
+        - retrieval_time: When data was fetched
+    """
+    if not raw_data:
+        return pd.DataFrame()
+    
+    records = []
+    
+    for obs in raw_data:
+        record = {
+            'location_id': obs.get('location_id', ''),
+            'location_name': obs.get('location_name', ''),
+            'latitude': obs.get('latitude'),
+            'longitude': obs.get('longitude'),
+            'timestamp': obs.get('timestamp', ''),
+            'temperature': obs.get('temperature'),
+            'humidity': obs.get('humidity'),
+            'precipitation': obs.get('precipitation'),
+            'wind_speed': obs.get('wind_speed'),
+            'wind_direction': obs.get('wind_direction'),
+            'pressure': obs.get('pressure'),
+            'conditions': obs.get('conditions', ''),
+            'source': obs.get('source', ''),
+            'retrieval_time': pd.Timestamp.now().isoformat()
+        }
+        records.append(record)
+    
+    df = pd.DataFrame(records)
+    
+    # Convert numeric columns
+    numeric_cols = ['latitude', 'longitude', 'temperature', 'humidity', 'precipitation', 
+                   'wind_speed', 'wind_direction', 'pressure']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Convert timestamp columns
+    time_cols = ['timestamp', 'retrieval_time']
+    for col in time_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    return df
+
+
 def normalize_climate_data_for_sqlite(climate_df: pd.DataFrame, zones_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """
     Prepare climate data for SQLite loading.
@@ -188,6 +254,14 @@ def normalize_climate_data_for_sqlite(climate_df: pd.DataFrame, zones_df: pd.Dat
     return result
 
 
+__all__ = [
+    'transform_met_climate_data',
+    'transform_climate_zones',
+    'transform_weather',
+    'normalize_climate_data_for_sqlite'
+]
+
+
 if __name__ == '__main__':
     # Test with sample data
     import json
@@ -225,10 +299,30 @@ if __name__ == '__main__':
         'source': 'MET'
     }]
     
+    # Sample weather data
+    sample_weather = [{
+        'location_id': 'LOC001',
+        'location_name': 'Test Location',
+        'latitude': 59.94,
+        'longitude': 10.72,
+        'timestamp': '2024-01-15T12:00:00Z',
+        'temperature': 2.5,
+        'humidity': 75.0,
+        'precipitation': 0.0,
+        'wind_speed': 3.2,
+        'wind_direction': 180,
+        'pressure': 1013.2,
+        'conditions': 'Partly cloudy',
+        'source': 'test_source'
+    }]
+    
     climate_df = transform_met_climate_data(sample_met)
     zones_df = transform_climate_zones(sample_zones)
+    weather_df = transform_weather(sample_weather)
     normalized = normalize_climate_data_for_sqlite(climate_df, zones_df)
     
     print(f"Climate stations: {len(normalized.get('climate_stations', pd.DataFrame()))} rows")
     print(f"Climate observations: {len(normalized.get('climate_observations', pd.DataFrame()))} rows")
     print(f"Climate zones: {len(normalized.get('climate_zones', pd.DataFrame()))} rows")
+    print(f"Weather data: {len(weather_df)} rows")
+    print(f"Available functions: {__all__}")

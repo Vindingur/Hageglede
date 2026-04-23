@@ -256,6 +256,21 @@ class ConfigManager:
         return None
 
 
+def get_source(name: str) -> Optional[SourceConfig]:
+    """Module-level wrapper for ConfigManager.get_source method.
+    
+    This function is imported by met.py to get source configuration.
+    It delegates to the global ConfigManager instance.
+    
+    Args:
+        name: Name of the source to retrieve.
+        
+    Returns:
+        SourceConfig object or None if not found.
+    """
+    return _config_manager.get_source(name)
+
+
 # Global configuration instance
 _config_manager = ConfigManager()
 config = _config_manager.load()

@@ -219,3 +219,52 @@ def combine_species_data(
     
     logger.info(f"Combined {len(combined)} unique species records")
     return combined
+
+
+def transform_plants(
+    artsdatabanken_data: Optional[List[Dict]] = None,
+    gbif_occurrences_data: Optional[List[Dict]] = None,
+    gbif_species_data: Optional[List[Dict]] = None
+) -> Dict[str, pd.DataFrame]:
+    """
+    Main transformer function for plant data.
+    
+    Args:
+        artsdatabanken_data: Raw data from Artsdatabanken API
+        gbif_occurrences_data: Raw GBIF occurrence data
+        gbif_species_data: Raw GBIF species data
+        
+    Returns:
+        Dictionary with DataFrames for different tables:
+        - "species": Combined species data
+        - "occurrences": GBIF occurrence data
+    """
+    result = {}
+    
+    # Transform Artsdatabanken data if provided
+    arts_df = pd.DataFrame()
+    if artsdatabanken_data:
+        arts_df = transform_artsdatabanken_species(artsdatabanken_data)
+    
+    # Transform GBIF species data if provided
+    gbif_species_df = pd.DataFrame()
+    if gbif_species_data:
+        gbif_species_df = transform_gbif_species(gbif_species_data)
+    
+    # Combine species data from all sources
+    if not arts_df.empty or not gbif_species_df.empty:
+        combined_species = combine_species_data(arts_df, gbif_species_df)
+        result["species"] = combined_species
+    
+    # Transform GBIF occurrences if provided
+    if gbif_occurrences_data:
+        occurrences_df = transform_gbif_occurrences(gbif_occurrences_data)
+        result["occurrences"] = occurrences_df
+    
+    logger.info(f"Transformed plant data: {list(result.keys())}")
+    return result
+
+
+# Alias functions for pipeline compatibility
+transform_gbif_occurrences = transform_gbif_occurrences
+transform_artsdatabanken_data = transform_artsdatabanken_species

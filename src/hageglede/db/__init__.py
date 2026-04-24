@@ -1,21 +1,15 @@
-"""Database package for unified gardening.db."""
-
-from .schema import Base, Plant, ClimateZone, WeatherStation, WeatherObservation, CalendarEntry, Plot, Planting, Recommendation, GardenNote, create_all_tables
-from .session import engine, SessionLocal, get_db
+"""Hageglede database module."""
+from .schema import Base, Plant, CalendarEntry, Plot, Planting, Recommendation, GardenNote
+from .session import init_sqlite, get_session
 
 __all__ = [
     "Base",
     "Plant",
-    "ClimateZone",
-    "WeatherStation", 
-    "WeatherObservation",
     "CalendarEntry",
     "Plot",
     "Planting",
     "Recommendation",
     "GardenNote",
-    "create_all_tables",
-    "engine",
-    "SessionLocal",
-    "get_db",
+    "init_sqlite",
+    "get_session",
 ]

@@ -1,5 +1,3 @@
-# PURPOSE: Module wrapper for fetchers package
-# CONSUMED BY: pipeline.py, other scripts
+# PURPOSE: Init for fetchers submodule
+# CONSUMED BY: Pipeline.py, other scripts modules
 # DEPENDS ON: none
-
-"""Fetchers package for data retrieval modules."""

@@ -1,10 +1,13 @@
-"""Transformer modules for Phase 0.5 data pipeline.
+# PURPOSE: Ensure module wrapper exists for transformers package
+# CONSUMED BY: scripts/pipeline.py
+# DEPENDS ON: none
 
-This package contains transformers that convert raw API data into
-structured tables ready for SQLite loading.
+"""
+Transformers module for data transformation operations.
 """
 
-from scripts.transformers.plants import transform_plants, transform_gbif_occurrences, transform_artsdatabanken_data
-from scripts.transformers.climate import transform_weather
+__all__ = []
 
-__all__ = ["transform_plants", "transform_weather", "transform_gbif_occurrences", "transform_artsdatabanken_data"]
+# Import transformer functions here
+# from .plant_transformer import transform_plant_data
+# from .species_transformer import transform_species_data

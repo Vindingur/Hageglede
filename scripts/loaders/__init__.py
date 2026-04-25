@@ -1,4 +1,7 @@
-# Loader package for data pipeline
-# Contains modules for loading transformed data into various targets
+# PURPOSE: Module wrapper for loaders package
+# CONSUMED BY: pipeline.py, loaders modules
+# DEPENDS ON: none
 
-__version__ = "0.5.0"
+from .plant_loader import load_plant_data
+
+__all__ = ['load_plant_data']

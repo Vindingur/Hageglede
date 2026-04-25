@@ -1,7 +1,3 @@
-# PURPOSE: Module wrapper for loaders package
-# CONSUMED BY: pipeline.py, loaders modules
+# PURPOSE: Init for loaders submodule
+# CONSUMED BY: scripts.pipeline
 # DEPENDS ON: none
-
-from .plant_loader import load_plant_data
-
-__all__ = ['load_plant_data']

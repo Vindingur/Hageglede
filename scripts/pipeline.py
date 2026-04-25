@@ -13,7 +13,7 @@ from pathlib import Path
 # Add the scripts directory to the Python path for module imports
 sys.path.append(str(Path(__file__).parent))
 
-from fetch.plant_fetcher import fetch_plant_data
+from scripts.fetchers.plant_fetcher import fetch_plant_data
 from processors.plant_processor import process_plant_data
 from loaders.plant_loader import load_plant_data
 

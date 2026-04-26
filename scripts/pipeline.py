@@ -13,9 +13,10 @@ from pathlib import Path
 # Add the scripts directory to the Python path for module imports
 sys.path.append(str(Path(__file__).parent))
 
-from scripts.fetchers.plant_fetcher import fetch_plant_data
-from processors.plant_processor import process_plant_data
-from loaders.plant_loader import load_plant_data
+from scripts.fetchers.gbif import fetch_gbif_data
+from scripts.fetchers.artsdatabanken import fetch_artsdatabanken_data
+from scripts.transformers.plants import process_plant_data
+from scripts.loaders.plant_loader import load_plant_data
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +35,7 @@ DATABASE_PATH = DATA_DIR / "plant_data.db"
 def run_pipeline() -> bool:
     """
     Execute the full ETL pipeline:
-    1. Fetch plant data
+    1. Fetch plant data from GBIF and Artsdatabanken
     2. Process/transform the data
     3. Load into SQLite database
     
@@ -49,23 +50,32 @@ def run_pipeline() -> bool:
         os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
         os.makedirs(DATA_DIR, exist_ok=True)
         
-        # Step 1: Fetch plant data
+        # Step 1: Fetch plant data from both sources
         logger.info("Step 1: Fetching plant data...")
-        raw_file_path = RAW_DATA_DIR / f"plants_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        gbif_file_path = RAW_DATA_DIR / f"gbif_raw_{timestamp}.csv"
+        artsdatabanken_file_path = RAW_DATA_DIR / f"artsdatabanken_raw_{timestamp}.csv"
         
         try:
-            fetch_plant_data(raw_file_path)
-            logger.info(f"✓ Successfully fetched plant data to {raw_file_path}")
+            fetch_gbif_data(gbif_file_path)
+            logger.info(f"✓ Successfully fetched GBIF data to {gbif_file_path}")
         except Exception as e:
-            logger.error(f"✗ Failed to fetch plant data: {e}")
+            logger.error(f"✗ Failed to fetch GBIF data: {e}")
+            return False
+        
+        try:
+            fetch_artsdatabanken_data(artsdatabanken_file_path)
+            logger.info(f"✓ Successfully fetched Artsdatabanken data to {artsdatabanken_file_path}")
+        except Exception as e:
+            logger.error(f"✗ Failed to fetch Artsdatabanken data: {e}")
             return False
         
         # Step 2: Process/transform the data
         logger.info("Step 2: Processing plant data...")
-        processed_file_path = PROCESSED_DATA_DIR / f"plants_processed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        processed_file_path = PROCESSED_DATA_DIR / f"plants_processed_{timestamp}.csv"
         
         try:
-            plant_df = process_plant_data(raw_file_path, processed_file_path)
+            plant_df = process_plant_data(gbif_file_path, artsdatabanken_file_path, processed_file_path)
             logger.info(f"✓ Successfully processed plant data to {processed_file_path}")
             logger.info(f"  Processed {len(plant_df)} plant records")
         except Exception as e:

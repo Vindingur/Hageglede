@@ -1,104 +1,188 @@
 #!/usr/bin/env python3
+
 """
-Plant data ETL pipeline: fetch, transform, and load operations.
-Coordinates the whole workflow from fetching raw data to loading into SQLite.
+Main ETL pipeline for Hageglede data processing.
+Coordinates fetching data from various sources, saving to data lake,
+and loading into PostgreSQL.
 """
 
-import os
+# PURPOSE: Main ETL pipeline coordinating data fetching, processing, and loading
+# CONSUMED BY: CLI, deployment scripts
+# DEPENDS ON: fetchers.gbif, fetchers.artsdatabanken, utils.data_lake, utils.postgres
+
 import sys
-import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 
-# Add the scripts directory to the Python path for module imports
-sys.path.append(str(Path(__file__).parent))
+# Add the scripts directory to the path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.fetchers.gbif import fetch_gbif_data
-from scripts.fetchers.artsdatabanken import fetch_artsdatabanken_data
-from scripts.transformers.plants import process_plant_data
-from scripts.loaders.plant_loader import load_plant_data
+from scripts.fetchers.gbif import fetch_norwegian_plant_occurrences
+from scripts.fetchers.artsdatabanken import ArtsdatabankenClient
+from scripts.utils.data_lake import DataLake
+from scripts.utils.postgres import PostgresLoader
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
-# Project paths
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-RAW_DATA_DIR = DATA_DIR / "raw"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
-DATABASE_PATH = DATA_DIR / "plant_data.db"
-
-def run_pipeline() -> bool:
+def fetch_and_save_data(start_date: str, end_date: str, data_dir: str = "data"):
     """
-    Execute the full ETL pipeline:
-    1. Fetch plant data from GBIF and Artsdatabanken
-    2. Process/transform the data
-    3. Load into SQLite database
+    Fetch data from all sources and save to the data lake.
     
-    Returns:
-        bool: True if pipeline completed successfully, False otherwise
+    Args:
+        start_date: Start date for data fetch (YYYY-MM-DD)
+        end_date: End date for data fetch (YYYY-MM-DD)
+        data_dir: Directory for data lake storage
     """
+    print(f"🔁 Starting data fetch from {start_date} to {end_date}")
+    
+    # Initialize data lake
+    data_lake = DataLake(base_path=data_dir)
+    
+    # Fetch and save GBIF data
+    print("📥 Fetching GBIF data...")
+    gbif_data = fetch_norwegian_plant_occurrences(start_date, end_date)
+    if gbif_data is not None and not gbif_data.empty:
+        gbif_path = data_lake.save_dataframe(
+            gbif_data, 
+            source="gbif", 
+            data_type="occurrences",
+            timestamp=datetime.now()
+        )
+        print(f"✅ GBIF data saved to {gbif_path}")
+    else:
+        print("⚠️  No GBIF data fetched")
+    
+    # Fetch and save Artsdatabanken data
+    print("📥 Fetching Artsdatabanken data...")
+    arts_client = ArtsdatabankenClient()
+    
+    # Fetch plant species list
+    plant_species = arts_client.get_plant_species()
+    if plant_species is not None and not plant_species.empty:
+        species_path = data_lake.save_dataframe(
+            plant_species,
+            source="artsdatabanken",
+            data_type="species_list",
+            timestamp=datetime.now()
+        )
+        print(f"✅ Artsdatabanken species list saved to {species_path}")
+    else:
+        print("⚠️  No Artsdatabanken species data fetched")
+    
+    # Optionally fetch detailed data for all plants
+    # This might take a while and make many API calls
+    print("📥 Fetching detailed plant data from Artsdatabanken...")
+    all_plants = arts_client.fetch_all_plants()
+    if all_plants is not None and not all_plants.empty:
+        plants_path = data_lake.save_dataframe(
+            all_plants,
+            source="artsdatabanken",
+            data_type="detailed_plants",
+            timestamp=datetime.now()
+        )
+        print(f"✅ Artsdatabanken detailed plant data saved to {plants_path}")
+    else:
+        print("⚠️  No detailed Artsdatabanken plant data fetched")
+    
+    print("✅ Data fetch complete!")
+    return True
+
+
+def load_to_postgres(data_dir: str = "data", clear_existing: bool = False):
+    """
+    Load data from data lake into PostgreSQL.
+    
+    Args:
+        data_dir: Directory containing data lake
+        clear_existing: Whether to clear existing tables before loading
+    """
+    print("🗄️  Loading data to PostgreSQL...")
+    
+    # Initialize data lake and loader
+    data_lake = DataLake(base_path=data_dir)
+    loader = PostgresLoader()
+    
     try:
-        logger.info("Starting plant data ETL pipeline")
+        # Load GBIF occurrences
+        gbif_files = data_lake.find_files(source="gbif", data_type="occurrences")
+        for file_path in gbif_files:
+            print(f"📤 Loading GBIF data from {file_path.name}...")
+            loader.load_gbif_occurrences(str(file_path), clear_existing=clear_existing)
+            clear_existing = False  # Only clear first time
         
-        # Ensure directories exist
-        os.makedirs(RAW_DATA_DIR, exist_ok=True)
-        os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
-        os.makedirs(DATA_DIR, exist_ok=True)
+        # Load Artsdatabanken species list
+        species_files = data_lake.find_files(source="artsdatabanken", data_type="species_list")
+        for file_path in species_files:
+            print(f"📤 Loading Artsdatabanken species from {file_path.name}...")
+            loader.load_artsdatabanken_species(str(file_path), clear_existing=clear_existing)
         
-        # Step 1: Fetch plant data from both sources
-        logger.info("Step 1: Fetching plant data...")
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        gbif_file_path = RAW_DATA_DIR / f"gbif_raw_{timestamp}.csv"
-        artsdatabanken_file_path = RAW_DATA_DIR / f"artsdatabanken_raw_{timestamp}.csv"
+        # Load Artsdatabanken detailed plants
+        plant_files = data_lake.find_files(source="artsdatabanken", data_type="detailed_plants")
+        for file_path in plant_files:
+            print(f"📤 Loading Artsdatabanken detailed plants from {file_path.name}...")
+            loader.load_artsdatabanken_plants(str(file_path), clear_existing=clear_existing)
         
-        try:
-            fetch_gbif_data(gbif_file_path)
-            logger.info(f"✓ Successfully fetched GBIF data to {gbif_file_path}")
-        except Exception as e:
-            logger.error(f"✗ Failed to fetch GBIF data: {e}")
-            return False
-        
-        try:
-            fetch_artsdatabanken_data(artsdatabanken_file_path)
-            logger.info(f"✓ Successfully fetched Artsdatabanken data to {artsdatabanken_file_path}")
-        except Exception as e:
-            logger.error(f"✗ Failed to fetch Artsdatabanken data: {e}")
-            return False
-        
-        # Step 2: Process/transform the data
-        logger.info("Step 2: Processing plant data...")
-        processed_file_path = PROCESSED_DATA_DIR / f"plants_processed_{timestamp}.csv"
-        
-        try:
-            plant_df = process_plant_data(gbif_file_path, artsdatabanken_file_path, processed_file_path)
-            logger.info(f"✓ Successfully processed plant data to {processed_file_path}")
-            logger.info(f"  Processed {len(plant_df)} plant records")
-        except Exception as e:
-            logger.error(f"✗ Failed to process plant data: {e}")
-            return False
-        
-        # Step 3: Load into SQLite database
-        logger.info("Step 3: Loading plant data into database...")
-        
-        try:
-            load_plant_data(plant_df, DATABASE_PATH)
-            logger.info(f"✓ Successfully loaded plant data into {DATABASE_PATH}")
-        except Exception as e:
-            logger.error(f"✗ Failed to load plant data: {e}")
-            return False
-        
-        logger.info("✓ Plant data ETL pipeline completed successfully!")
+        print("✅ PostgreSQL loading complete!")
         return True
         
     except Exception as e:
-        logger.error(f"✗ Pipeline failed with unexpected error: {e}")
+        print(f"❌ Error loading to PostgreSQL: {e}")
         return False
 
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(description="Hageglede ETL Pipeline")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    
+    # Fetch command
+    fetch_parser = subparsers.add_parser("fetch", help="Fetch data from sources")
+    fetch_parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
+    fetch_parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")
+    fetch_parser.add_argument("--data-dir", default="data", help="Data directory")
+    
+    # Load command
+    load_parser = subparsers.add_parser("load", help="Load data to PostgreSQL")
+    load_parser.add_argument("--data-dir", default="data", help="Data directory")
+    load_parser.add_argument("--clear-existing", action="store_true", 
+                           help="Clear existing data before loading")
+    
+    # Full pipeline command
+    pipeline_parser = subparsers.add_parser("run", help="Run full ETL pipeline")
+    pipeline_parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
+    pipeline_parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")
+    pipeline_parser.add_argument("--data-dir", default="data", help="Data directory")
+    pipeline_parser.add_argument("--no-clear", action="store_true", 
+                               help="Don't clear existing PostgreSQL data")
+    
+    args = parser.parse_args()
+    
+    if args.command == "fetch":
+        success = fetch_and_save_data(args.start_date, args.end_date, args.data_dir)
+        sys.exit(0 if success else 1)
+        
+    elif args.command == "load":
+        success = load_to_postgres(args.data_dir, args.clear_existing)
+        sys.exit(0 if success else 1)
+        
+    elif args.command == "run":
+        print("🚀 Running full ETL pipeline...")
+        
+        # Fetch data
+        fetch_success = fetch_and_save_data(args.start_date, args.end_date, args.data_dir)
+        if not fetch_success:
+            print("❌ Fetch phase failed, aborting pipeline")
+            sys.exit(1)
+        
+        # Load to PostgreSQL
+        clear_existing = not args.no_clear
+        load_success = load_to_postgres(args.data_dir, clear_existing)
+        sys.exit(0 if load_success else 1)
+        
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    success = run_pipeline()
-    sys.exit(0 if success else 1)
+    main()

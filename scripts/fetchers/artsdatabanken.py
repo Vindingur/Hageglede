@@ -178,3 +178,9 @@ class ArtsdatabankenFetcher:
         
         logger.info(f"Total plants fetched: {len(all_plants)}")
         return all_plants
+
+
+# PURPOSE: Fix pipeline import by providing ArtsdatabankenClient alias for ArtsdatabankenFetcher class
+# CONSUMED BY: scripts/pipeline.py likely imports ArtsdatabankenClient from here
+# DEPENDS ON: requests library for HTTP requests
+ArtsdatabankenClient = ArtsdatabankenFetcher

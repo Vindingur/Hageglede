@@ -5,6 +5,10 @@ GBIF API data fetcher for Norwegian plant occurrences.
 Fetches plant occurrence records from GBIF for Norway.
 """
 
+# PURPOSE: Fetches plant occurrence records from GBIF API for Norway with optional date filtering to limit data to relevant time periods
+# CONSUMED BY: pipeline.py, any CLI or automated data fetch processes
+# DEPENDS ON: requests library for HTTP calls, logging for monitoring, datetime handling
+
 import time
 import logging
 import requests
@@ -22,12 +26,20 @@ GBIF_API_BASE = "https://api.gbif.org/v1"
 DELAY_BETWEEN_REQUESTS = 0.5  # seconds
 
 
-def fetch_norwegian_plant_occurrences(max_records: int = 10000) -> List[Dict]:
+def fetch_norwegian_plant_occurrences(
+    start_date: Optional[str] = None, 
+    end_date: Optional[str] = None, 
+    max_records: int = 10000
+) -> List[Dict]:
     """
     Fetch plant occurrence records from GBIF for Norway.
     
     Parameters:
     -----------
+    start_date : str, optional
+        Start date for filtering occurrences (YYYY-MM-DD format)
+    end_date : str, optional
+        End date for filtering occurrences (YYYY-MM-DD format)
     max_records : int
         Maximum number of records to fetch (default: 10000)
     
@@ -43,6 +55,18 @@ def fetch_norwegian_plant_occurrences(max_records: int = 10000) -> List[Dict]:
         "limit": 300,  # Max per request
         "offset": 0,
     }
+    
+    # Add date filtering if provided
+    if start_date or end_date:
+        date_filter = ""
+        if start_date:
+            date_filter = start_date
+        if end_date:
+            if date_filter:  # If start_date was provided
+                date_filter += f",{end_date}"
+            else:
+                date_filter = f",{end_date}"  # GBIF expects format ",end_date" for only end date
+        params["occurrenceDate"] = date_filter
     
     all_occurrences = []
     total_fetched = 0
@@ -126,7 +150,12 @@ def save_to_json(data: List[Dict], output_path: str = "gbif_occurrences.json"):
 if __name__ == "__main__":
     # Example usage
     try:
-        occurrences = fetch_norwegian_plant_occurrences(max_records=1000)
+        # Example with date filtering
+        occurrences = fetch_norwegian_plant_occurrences(
+            start_date="2020-01-01",
+            end_date="2023-12-31",
+            max_records=1000
+        )
         save_to_json(occurrences)
     except Exception as e:
         logger.error(f"Failed to fetch GBIF data: {e}")

@@ -6,9 +6,9 @@ Coordinates fetching data from various sources, saving to data lake,
 and loading into PostgreSQL.
 """
 
-# PURPOSE: Main ETL pipeline coordinating data fetching, processing, and loading
-# CONSUMED BY: CLI, deployment scripts
-# DEPENDS ON: fetchers.gbif, fetchers.artsdatabanken, utils.data_lake, utils.postgres
+# PURPOSE: Main ETL pipeline coordinating data fetching, processing, and loading from multiple sources including GBIF and Artsdatabanken
+# CONSUMED BY: CLI commands, deployment scripts, scheduled jobs
+# DEPENDS ON: scripts.fetchers.gbif, scripts.fetchers.artsdatabanken, scripts.utils.data_lake, scripts.utils.postgres
 
 import sys
 import argparse
@@ -40,10 +40,14 @@ def fetch_and_save_data(start_date: str, end_date: str, data_dir: str = "data"):
     
     # Fetch and save GBIF data
     print("📥 Fetching GBIF data...")
-    gbif_data = fetch_norwegian_plant_occurrences(start_date, end_date)
-    if gbif_data is not None and not gbif_data.empty:
+    gbif_data = fetch_norwegian_plant_occurrences(start_date=start_date, end_date=end_date)
+    if gbif_data is not None and len(gbif_data) > 0:
+        # Convert to DataFrame for consistency with other data sources
+        import pandas as pd
+        gbif_df = pd.DataFrame(gbif_data)
+        
         gbif_path = data_lake.save_dataframe(
-            gbif_data, 
+            gbif_df, 
             source="gbif", 
             data_type="occurrences",
             timestamp=datetime.now()

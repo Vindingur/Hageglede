@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 ETL pipeline for synchronizing plant observation data.
 Coordinates fetching from GBIF and Artsdatabanken,

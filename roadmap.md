@@ -173,7 +173,7 @@ scripts/
 - Maintain FastAPI backend, potentially add Redis cache
 
 **Future Data Expansion (Post-MVP):**
-- **Soil data integration** - Soil type, pH levels, and composition data for more precise recommendations
+- **Soil data integration** - Soil type, pH levels, and composition data for more precise recommendations (considered as future enhancement)
 - **Historical weather patterns** - Long-term climate data for micro-climate analysis
 - **Pest and disease data** - Regional pest information for plant protection advice
 - **Local nursery inventory** - Integration with local plant suppliers
@@ -277,4 +277,4 @@ The Phase 1 MVP maintains simplicity while establishing a foundation that can sc
 ---
 
 *This document is living. Update after each phase based on evidence, not opinion.*  
-*Last updated: Added soil data as future dataset for post-MVP Phase 3 implementation*
+*Last updated: Soil data integration noted as future enhancement for post-MVP Phase 3 implementation*

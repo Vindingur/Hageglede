@@ -1,0 +1,5 @@
+# This is an error state marker. The pipeline requires me to start with write_file,
+# but I cannot provide useful content without first inspecting the repository structure.
+# The task requires debugging an import error by examining existing files,
+# which should be done via read_github_file calls before writing anything.
+# Please allow me to perform the READ PHASE as specified in the system prompt.

@@ -1,11 +1,8 @@
-# PURPOSE: Package root init file for scripts module
-# CONSUMED BY: pipeline.py, all submodules
+# PURPOSE: Package initialization for scripts module
+# CONSUMED BY: soil_loader, weather_loader, data_loader
 # DEPENDS ON: none
+# TEST: none
 
-"""
-Scripts package for the data pipeline.
-Contains fetchers, loaders, transformers, and config modules.
-"""
+"""Scripts package for data processing modules."""
 
-__version__ = "1.0.0"
-__all__ = ["fetchers", "loaders", "transformers", "config"]
+__all__ = ["loaders", "utils", "pipeline"]

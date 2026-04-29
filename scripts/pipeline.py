@@ -1,6 +1,6 @@
 # PURPOSE: Main pipeline script for loading data (weather, plants) into the Hageglede database
 # CONSUMED BY: scripts/__main__.py (if exists) for command-line execution
-# DEPENDS ON: scripts.loaders.weather_loader, scripts.loaders.plant_loader
+# DEPENDS ON: scripts.loaders.weather_loader, scripts.loaders.plant_loader, scripts.config
 # TEST: none
 
 #!/usr/bin/env python3
@@ -20,20 +20,31 @@ sys.path.insert(0, str(project_root))
 # Local imports
 from scripts.loaders.weather_loader import load_weather_data
 from scripts.loaders.plant_loader import load_plant_data
+from scripts.config import config, DATA_DIR
 
 
 def main():
     parser = argparse.ArgumentParser(description="Load data into Hageglede database")
-    parser.add_argument("data_dir", help="Directory containing CSV files")
-    parser.add_argument("database_path", help="Path to SQLite database file")
+    parser.add_argument("--data-dir", default=str(DATA_DIR), 
+                       help="Directory containing CSV files (default: data/)")
+    parser.add_argument("--database-path", default=config.database.path,
+                       help="Path to SQLite database file (default: hageglede.db in data directory)")
     parser.add_argument("--clear-existing", action="store_true", 
                        help="Clear existing data before loading")
     
     args = parser.parse_args()
     
     data_dir = Path(args.data_dir)
-    database_path = Path(args.database_path)
+    database_path = Path(args.database_path).resolve()
+    
+    # If database_path is relative, make it relative to data_dir
+    if not database_path.is_absolute():
+        database_path = data_dir / database_path
+    
     clear_existing = args.clear_existing
+    
+    # Ensure data directory exists
+    data_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Data directory: {data_dir}")
     print(f"Database path: {database_path}")
@@ -47,6 +58,7 @@ def main():
         print("Weather data loaded successfully")
     else:
         print(f"Warning: Weather CSV not found at {weather_csv}")
+        print(f"Expected CSV files in: {data_dir}")
     
     # Load plant data
     print("\n=== Loading plant data ===")
@@ -56,6 +68,7 @@ def main():
         print(f"Plant data loaded: {len(plant_df)} records")
     else:
         print(f"Warning: Plant CSV not found at {plant_csv}")
+        print(f"Expected CSV files in: {data_dir}")
     
     print("\n=== Pipeline complete ===")
 

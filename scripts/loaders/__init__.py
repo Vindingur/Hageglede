@@ -1,9 +1,16 @@
-# PURPOSE: Exports available loader classes for the pipeline
-# CONSUMED BY: scripts/pipeline.py
-# DEPENDS ON: scripts.loaders.weather_loader, scripts.loaders.plant_loader
+# PURPOSE: Public interface for data loaders module
+# CONSUMED BY: scripts/pipeline.py, any script importing from scripts.loaders
+# DEPENDS ON: scripts/loaders/weather_loader.py, scripts/loaders/plant_loader.py
 # TEST: none
 
-from .weather_loader import WeatherLoader
-from .plant_loader import PlantLoader
+"""
+Data loaders for Aletheia agricultural pipeline.
 
-__all__ = ["WeatherLoader", "PlantLoader"]
+This module provides standardized interfaces for loading weather and plant data
+from various sources.
+"""
+
+from .weather_loader import load_weather_data
+from .plant_loader import load_plant_data
+
+__all__ = ["load_weather_data", "load_plant_data"]

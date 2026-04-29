@@ -1,6 +1,11 @@
+# PURPOSE: Main pipeline script for loading data (weather, plants) into the Hageglede database
+# CONSUMED BY: scripts/__main__.py (if exists) for command-line execution
+# DEPENDS ON: scripts.loaders.weather_loader, scripts.loaders.plant_loader
+# TEST: none
+
 #!/usr/bin/env python3
 """
-Main pipeline for loading weather, plant, and soil data into Hageglede database.
+Main pipeline for loading weather and plant data into Hageglede database.
 """
 
 import os

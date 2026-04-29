@@ -15,7 +15,6 @@ sys.path.insert(0, str(project_root))
 # Local imports
 from scripts.loaders.weather_loader import load_weather_data
 from scripts.loaders.plant_loader import load_plant_data
-from scripts.loaders.soil_loader import load_soil_data
 
 
 def main():
@@ -52,15 +51,6 @@ def main():
         print(f"Plant data loaded: {len(plant_df)} records")
     else:
         print(f"Warning: Plant CSV not found at {plant_csv}")
-    
-    # Load soil data
-    print("\n=== Loading soil data ===")
-    soil_csv = data_dir / "soil.csv"
-    if soil_csv.exists():
-        soil_df = load_soil_data(soil_csv, database_path, clear_existing)
-        print(f"Soil data loaded: {len(soil_df)} records")
-    else:
-        print(f"Warning: Soil CSV not found at {soil_csv}")
     
     print("\n=== Pipeline complete ===")
 

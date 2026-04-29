@@ -39,8 +39,8 @@ def main():
     print("\n=== Loading weather data ===")
     weather_csv = data_dir / "weather.csv"
     if weather_csv.exists():
-        weather_df = load_weather_data(weather_csv, database_path, clear_existing)
-        print(f"Weather data loaded: {len(weather_df)} records")
+        load_weather_data(str(data_dir), str(database_path))
+        print("Weather data loaded successfully")
     else:
         print(f"Warning: Weather CSV not found at {weather_csv}")
     

@@ -9,8 +9,6 @@ import sqlite3
 from datetime import datetime
 from typing import Dict, List, Any
 
-from src.hageglede.db.schema import WeatherStation, WeatherObservation
-
 
 def load_weather_data(data_dir: str, database_path: str) -> None:
     """
@@ -159,6 +157,16 @@ def load_weather_data(data_dir: str, database_path: str) -> None:
         raise
     finally:
         conn.close()
+
+
+def load_weather_stations(csv_file: str, database_path: str) -> None:
+    """Load weather stations from CSV file into database."""
+    load_weather_data(csv_file, database_path)
+
+
+def load_weather_observations(csv_file: str, database_path: str) -> None:
+    """Load weather observations from CSV file into database."""
+    load_weather_data(csv_file, database_path)
 
 
 if __name__ == "__main__":

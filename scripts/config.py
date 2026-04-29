@@ -1,3 +1,8 @@
+# PURPOSE: Configuration management for the Hageglede data pipeline with sensible defaults
+# CONSUMED BY: scripts/pipeline.py, fetchers/plant_fetcher.py, loaders/weather_loader.py, loaders/plant_loader.py
+# DEPENDS ON: none
+# TEST: none
+
 """
 Configuration management for the Hageglede data pipeline.
 Handles API keys, database paths, source URLs, and rate limits.
@@ -24,7 +29,7 @@ class SourceType(Enum):
 @dataclass
 class DatabaseConfig:
     """Database connection configuration."""
-    path: str = "data/hageglede.db"
+    path: str = "hageglede.db"
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10
@@ -53,6 +58,7 @@ class PipelineConfig:
     cache_dir: str = "data/cache"
     max_workers: int = 4
     batch_size: int = 1000
+    data_dir: str = "data"
 
 
 class ConfigManager:
@@ -108,6 +114,17 @@ class ConfigManager:
         # Override from environment variables
         self._load_from_env()
         
+        # Ensure sensible defaults
+        if not self.config.data_dir:
+            self.config.data_dir = "data"
+        
+        # Ensure database path is relative to project root if not absolute
+        if not Path(self.config.database.path).is_absolute():
+            # Make it relative to project root (where config is in scripts/)
+            scripts_dir = Path(__file__).parent
+            project_root = scripts_dir.parent
+            self.config.database.path = str(project_root / self.config.database.path)
+        
         return self.config
     
     def _load_from_file(self, path: str):
@@ -152,14 +169,9 @@ class ConfigManager:
                 self.config.sources.append(source)
         
         # Update pipeline settings
-        if 'log_level' in data:
-            self.config.log_level = data['log_level']
-        if 'cache_dir' in data:
-            self.config.cache_dir = data['cache_dir']
-        if 'max_workers' in data:
-            self.config.max_workers = data['max_workers']
-        if 'batch_size' in data:
-            self.config.batch_size = data['batch_size']
+        for key in ['log_level', 'cache_dir', 'max_workers', 'batch_size', 'data_dir']:
+            if key in data:
+                setattr(self.config, key, data[key])
     
     def _load_from_env(self):
         """Load configuration from environment variables."""
@@ -167,6 +179,11 @@ class ConfigManager:
         db_path = os.getenv('DATABASE_PATH')
         if db_path:
             self.config.database.path = db_path
+        
+        # Data directory
+        data_dir = os.getenv('DATA_DIR')
+        if data_dir:
+            self.config.data_dir = data_dir
         
         # API keys
         for source in self.config.sources:
@@ -192,13 +209,11 @@ class ConfigManager:
                 met_source.api_key = f"{met_client_id}:{met_client_secret}"
         
         # Pipeline settings
-        log_level = os.getenv('LOG_LEVEL')
-        if log_level:
-            self.config.log_level = log_level
-        
-        cache_dir = os.getenv('CACHE_DIR')
-        if cache_dir:
-            self.config.cache_dir = cache_dir
+        for env_var, attr in [('LOG_LEVEL', 'log_level'), ('CACHE_DIR', 'cache_dir'), 
+                             ('DATA_DIR', 'data_dir')]:
+            value = os.getenv(env_var)
+            if value:
+                setattr(self.config, attr, value)
         
         max_workers = os.getenv('MAX_WORKERS')
         if max_workers:
@@ -210,9 +225,20 @@ class ConfigManager:
     
     def save(self, path: str):
         """Save current configuration to file."""
+        # Convert paths to relative for storage
+        db_path_relative = self.config.database.path
+        if Path(db_path_relative).is_absolute():
+            scripts_dir = Path(__file__).parent
+            project_root = scripts_dir.parent
+            try:
+                db_path_relative = str(Path(db_path_relative).relative_to(project_root))
+            except ValueError:
+                # Path is not relative to project, keep as is
+                pass
+                
         data = {
             'database': {
-                'path': self.config.database.path,
+                'path': db_path_relative,
                 'echo': self.config.database.echo,
                 'pool_size': self.config.database.pool_size,
                 'max_overflow': self.config.database.max_overflow
@@ -234,7 +260,8 @@ class ConfigManager:
             'log_level': self.config.log_level,
             'cache_dir': self.config.cache_dir,
             'max_workers': self.config.max_workers,
-            'batch_size': self.config.batch_size
+            'batch_size': self.config.batch_size,
+            'data_dir': self.config.data_dir
         }
         
         path_obj = Path(path)
@@ -292,6 +319,8 @@ def load_config(config_path: Optional[str] = None) -> PipelineConfig:
 
 # Backward-compatible module-level exports for pipeline.py
 DATABASE_PATH = config.database.path
+DATA_DIR = config.data_dir
+
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -331,4 +360,3 @@ MET_CLIENT_ID = os.getenv('MET_CLIENT_ID', '')
 
 # Directory paths
 CACHE_DIR = config.cache_dir
-DATA_DIR = Path(config.database.path).parent.absolute()

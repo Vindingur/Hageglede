@@ -1,5 +1,5 @@
-# PURPOSE: Package initialization for scripts module
-# CONSUMED BY: soil_loader, weather_loader, data_loader
+# PURPOSE: Package initialization for scripts module, defines __all__ exports
+# CONSUMED BY: scripts/pipeline.py for import resolution
 # DEPENDS ON: none
 # TEST: none
 

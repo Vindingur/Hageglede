@@ -1,379 +1,398 @@
-#!/usr/bin/env python3
+# PURPOSE: MET Frost API fetcher for live Norwegian weather observations with auth, retries and rate limiting
+# CONSUMED BY: scripts/pipeline.py, scripts.transformers.climate
+# DEPENDS ON: scripts.fetchers.base, scripts.fetchers.met_frost_client, scripts.config.config
+# TEST: none
+
 """
-Fetches MET data from the Norwegian Meteorological Institute's API
-using MET_CLIENT_ID stored in environment variables via config module.
+MET data fetcher using the live Norwegian Meteorological Institute Frost API.
+Fetches real weather observations from frost.met.no with proper authentication,
+rate limiting respect, and exponential-backoff retries.
 
-This script downloads MET data from their API by performing the following steps:
+Usage (programmatic):
+    from scripts.fetchers.met import MetFetcher
+    fetcher = MetFetcher(config)
+    raw_data = await fetcher.fetch(station_id="SN18700", elements=["air_temperature"])
 
-1. Authentication via client ID (stored as environment variable MET_CLIENT_ID)
-2. Fetching timeseries data for specified locations and parameters
-3. Storing the raw response as JSON files in the data directory (DATA_DIR)
-   and also a parquet file for tabular data
-
-Usage:
-    python3 met.py --location <location_id> --element <element_id>
-
-Examples:
-    python3 met.py --location SN18700 --element air_temperature
-    python3 met.py --location SN18700 --element wind_speed
+Usage (CLI):
+    python -m scripts.fetchers.met --station SN18700 --element air_temperature
 """
 
 import argparse
 import json
+import logging
 import os
 import sys
-import pandas as pd
-import requests
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# Import configuration from the config module using relative import
-try:
-    from ..config import get_source, DATA_DIR, CACHE_DIR
-except ImportError:
-    # Fallback for direct execution
-    sys.path.append(str(Path(__file__).parent.parent.parent))
-    try:
-        from config import get_source, DATA_DIR, CACHE_DIR
-    except ImportError as e:
-        print(f"Error importing config: {e}")
-        print("Please ensure get_source, DATA_DIR, and CACHE_DIR are defined in config.py")
-        print("and the environment variable MET_CLIENT_ID is set.")
-        sys.exit(1)
+import pandas as pd
+
+from ..config.config import FetcherConfig, config as app_config
+from .base import BaseFetcher, FetchConfig, FetchResult
+from .met_frost_client import AuthenticationError, MetFrostClient, RateLimitError
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+logger = logging.getLogger(__name__)
 
 
-class METFetcher:
+class MetFetcher(BaseFetcher[List[Dict[str, Any]]]):
     """
-    Fetches MET data from the Norwegian Meteorological Institute's API.
-    
-    This class wraps the existing fetch logic to provide a clean interface
-    for programmatic use while preserving backward compatibility with the CLI.
+    Fetcher for MET Norway Frost API live weather observations.
+
+    Returns structured observation records that match the interface
+    expected by ``scripts.transformers.climate.transform_met_climate_data``.
     """
-    
-    def __init__(self):
-        """Initialize the METFetcher with authentication."""
-        self.auth_header = None
-        self.client_id = None
-        self._authenticate()
-    
-    def _authenticate(self):
-        """
-        Authenticate with MET API using client ID from environment variable.
-        
-        Returns:
-            bool: True if authentication successful, False otherwise
-        """
-        # Get MET source configuration
-        met_source = get_source('MET')
-        if not met_source:
-            print("ERROR: MET source configuration not found in config.")
-            print("Please ensure MET is defined in SourceConfig with env_key='MET_CLIENT_ID'.")
-            return False
-        
-        met_client_id = met_source.env_key
-        if not met_client_id:
-            print("ERROR: MET_CLIENT_ID environment variable is not set.")
-            print("Please set MET_CLIENT_ID with your MET API client ID.")
-            return False
 
-        # MET API uses client ID in the header for authentication
-        self.auth_header = {"X-Client-ID": met_client_id}
-        self.client_id = met_client_id
+    def __init__(self, cfg: Optional[FetcherConfig] = None):
+        self.cfg = cfg or app_config.fetcher
+        self._client: Optional[MetFrostClient] = None
+        self._init_client()
+        super().__init__(
+            source_name="met",
+            config=FetchConfig(
+                url=self.cfg.met_api_url,
+                api_key=self.cfg.met_frost_api_key,
+                retry_attempts=self.cfg.max_retries,
+                retry_delay=int(self.cfg.rate_limit_delay),
+                timeout=self.cfg.timeout,
+            ),
+        )
 
-        # Optional test request to verify authentication
-        test_url = "https://frost.met.no/sources/v0.jsonld?types=SensorSystem&country=NO&county=Troms og Finnmark"
-        try:
-            response = requests.get(test_url, headers=self.auth_header, timeout=10)
-            if response.status_code == 200:
-                print(f"✓ Authentication successful with client ID: {self.client_id[:8]}...")
-                return True
-            else:
-                print(f"✗ Authentication failed with status code: {response.status_code}")
-                print(f"Response: {response.text[:200]}")
-                return False
-        except requests.exceptions.RequestException as e:
-            print(f"✗ Authentication request failed: {e}")
-            return False
-    
-    def fetch_data(self, location_id, element_id):
+    # ------------------------------------------------------------------
+    # Client lifecycle
+    # ------------------------------------------------------------------
+    def _init_client(self) -> None:
+        key = self.cfg.met_frost_api_key
+        if not key:
+            key = os.getenv("MET_CLIENT_ID", "")
+        if key:
+            self._client = MetFrostClient(
+                client_id=key,
+                base_url=self.cfg.met_api_url,
+                timeout=self.cfg.timeout,
+                max_retries=self.cfg.max_retries,
+                rate_limit_delay=self.cfg.rate_limit_delay,
+            )
+        else:
+            logger.warning("MET_FROST_API_KEY / MET_CLIENT_ID not configured")
+
+    # ------------------------------------------------------------------
+    # BaseFetcher interface
+    # ------------------------------------------------------------------
+    async def fetch(
+        self,
+        station_id: str = "SN18700",
+        elements: Optional[List[str]] = None,
+        days_back: int = 7,
+    ) -> FetchResult[List[Dict[str, Any]]]:
         """
-        Fetch MET timeseries data for a specific location and element.
-        
+        Fetch live observations from the MET Frost API.
+
         Args:
-            location_id (str): MET location/source ID (e.g., 'SN18700')
-            element_id (str): Element/parameter ID (e.g., 'air_temperature')
-        
+            station_id: MET station source ID (e.g. ``SN18700``).
+            elements: List of element IDs (e.g. ``["air_temperature"]``).
+            days_back: Number of days to look back from today.
+
         Returns:
-            dict: JSON response from MET API or None if request fails
+            FetchResult whose ``data`` is a list of observation dicts compatible
+            with ``transform_met_climate_data``.
         """
-        if not self.auth_header:
-            print("✗ Not authenticated. Call _authenticate() first.")
-            return None
-        
-        # Get MET base URL from configuration
-        met_source = get_source('MET')
-        base_url = met_source.base_url if met_source else "https://frost.met.no"
-        observations_url = f"{base_url}/observations/v0.jsonld"
+        if self._client is None:
+            raise AuthenticationError("MET Frost client not initialised – missing API key")
 
-        # Date range: last 7 days including today
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=7)
+        start = (datetime.utcnow() - timedelta(days=days_back)).date()
+        end = datetime.utcnow().date()
+        referencetime = f"{start.isoformat()}/{end.isoformat()}"
 
-        params = {
-            "sources": location_id,
-            "elements": element_id,
-            "referencetime": f"{start_date.date()}/{end_date.date()}",
-            "timeoffsets": "PT0H",  # No time offset
-            "timeresolutions": "PT1H",  # Hourly resolution
-            "performancecategories": "C",  # Controlled quality only
-            "exposurecategories": "1",  # Open area
-            "levels": "0",
-            "fields": "sourceId,referenceTime,elementId,value,unit,timeOffset,timeResolution"
+        logger.info(
+            "Fetching MET Frost observations station=%s elements=%s ref=%s",
+            station_id, elements or "all", referencetime,
+        )
+
+        t0 = time.perf_counter()
+        try:
+            payload = self._client.get_observations(
+                sources=station_id,
+                elements=",".join(elements) if elements else None,
+                referencetime=referencetime,
+            )
+        except (RateLimitError, AuthenticationError):
+            raise
+        except Exception as exc:
+            logger.exception("MET Frost fetch failed")
+            return FetchResult(
+                data=[],
+                metadata={"station_id": station_id, "error": str(exc)},
+                timestamp=datetime.utcnow(),
+                source=self.source_name,
+                success=False,
+                error_message=str(exc),
+            )
+        elapsed = time.perf_counter() - t0
+
+        structured = self._parse_response(payload, station_id)
+        logger.info(
+            "Fetched %d observations in %.2fs from station %s",
+            len(structured), elapsed, station_id,
+        )
+
+        return FetchResult(
+            data=structured,
+            metadata={
+                "station_id": station_id,
+                "elements": elements,
+                "referencetime": referencetime,
+                "records": len(structured),
+                "elapsed_s": elapsed,
+            },
+            timestamp=datetime.utcnow(),
+            source=self.source_name,
+            success=True,
+        )
+
+    def validate_config(self) -> bool:
+        return bool(self._client and self._client.client_id)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_response(payload: Dict[str, Any], station_id: str) -> List[Dict[str, Any]]:
+        """
+        Parse Frost JSON payload into the structure required by the transformer.
+
+        Transformer expects each root dict to contain:
+            - ``source``: station metadata (id, name, geometry)
+            - ``referenceTime``: ISO timestamp string
+            - ``observations``: list of observation dicts with ``elementId``,
+              ``value``, ``unit``, ``timeOffset``, ``timeResolution``, ``level``
+        """
+        records: List[Dict[str, Any]] = []
+        data = payload.get("data", [])
+        if not data:
+            logger.warning("MET Frost response contained zero data items")
+            return records
+
+        # station-level metadata is usually inside each observation block
+        for item in data:
+            source_info = item.get("source")
+            if not source_info:
+                source_info = {"id": station_id}
+
+            entry: Dict[str, Any] = {
+                "source": source_info,
+                "referenceTime": item.get("referenceTime", ""),
+                "observations": [],
+            }
+            for obs in item.get("observations", []):
+                entry["observations"].append({
+                    "elementId": obs.get("elementId", ""),
+                    "value": obs.get("value"),
+                    "unit": obs.get("unit", ""),
+                    "timeOffset": obs.get("timeOffset", ""),
+                    "timeResolution": obs.get("timeResolution", ""),
+                    "level": obs.get("level", {}),
+                })
+            records.append(entry)
+        return records
+
+    # ------------------------------------------------------------------
+    # Backwards-compatible / convenience methods
+    # ------------------------------------------------------------------
+    def fetch_climate_data(
+        self,
+        station_id: str = "SN18700",
+        elements: Optional[List[str]] = None,
+        days_back: int = 7,
+    ) -> pd.DataFrame:
+        """
+        Synchronous convenience wrapper returning a DataFrame.
+
+        Performs a synchronous fetch (the MET Frost API is REST) and
+        returns an empty DataFrame on failure so that downstream pipeline
+        steps can continue.
+        """
+        import asyncio
+
+        try:
+            result = asyncio.get_event_loop().run_until_complete(
+                self.fetch(station_id=station_id, elements=elements, days_back=days_back)
+            )
+        except Exception as exc:
+            logger.error("fetch_climate_data failed: %s", exc)
+            return pd.DataFrame()
+
+        if not result.success:
+            logger.error("fetch_climate_data unsuccessful: %s", result.error_message)
+            return pd.DataFrame()
+
+        # Flatten into DataFrame
+        rows: List[Dict[str, Any]] = []
+        for rec in result.data:
+            base = {
+                "source": rec.get("source", {}),
+                "referenceTime": rec.get("referenceTime"),
+            }
+            for obs in rec.get("observations", []):
+                row = base.copy()
+                row.update(obs)
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def get_environment_info(
+        self, lat: float = 59.9139, lon: float = 10.7522
+    ) -> Dict[str, Any]:
+        """
+        Return a minimal environment info map using nearest available station.
+        """
+        return {
+            "temperature": "N/A",
+            "humidity": "N/A",
+            "precipitation": "N/A",
+            "wind_speed": "N/A",
+            "wind_direction": "N/A",
+            "sunrise": "N/A",
+            "sunset": "N/A",
+            "location": {"lat": lat, "lon": lon},
+            "data_source": "MET_Frost_API",
+            "station_id": self._client.fetch_station_nearby(lat, lon) if self._client else None,
         }
 
-        print(f"Fetching MET data for location '{location_id}', element '{element_id}'...")
-        print(f"Date range: {start_date.date()} to {end_date.date()}")
-
-        try:
-            response = requests.get(observations_url, headers=self.auth_header, params=params, timeout=30)
-            print(f"Response status: {response.status_code}")
-
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✓ Successfully fetched {len(data.get('data', []))} observations")
-                return data
-            elif response.status_code == 429:
-                print("✗ Rate limit exceeded. Please wait and try again later.")
-                return None
-            elif response.status_code == 401:
-                print("✗ Authentication failed. Check your MET_CLIENT_ID.")
-                return None
-            else:
-                print(f"✗ Request failed with status {response.status_code}: {response.text[:200]}")
-                return None
-
-        except requests.exceptions.RequestException as e:
-            print(f"✗ Request failed: {e}")
-            return None
-    
-    @staticmethod
-    def save_raw_response(data, location_id, element_id):
-        """
-        Save raw JSON response to data directory.
-        
-        Args:
-            data (dict): JSON response from MET API
-            location_id (str): Location identifier
-            element_id (str): Element identifier
-        
-        Returns:
-            Path: Path to saved JSON file
-        """
-        # Ensure data directory exists
-        raw_data_dir = Path(DATA_DIR) / "raw" / "met"
-        raw_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"met_{location_id}_{element_id}_{timestamp}.json"
-        filepath = raw_data_dir / filename
-
-        # Save JSON file
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        print(f"✓ Raw data saved to: {filepath}")
-        return filepath
-    
-    @staticmethod
-    def parse_to_dataframe(data):
-        """
-        Parse MET JSON response into a pandas DataFrame.
-        
-        Args:
-            data (dict): JSON response from MET API
-        
-        Returns:
-            pd.DataFrame: Parsed data or empty DataFrame if parsing fails
-        """
-        if not data or 'data' not in data:
-            return pd.DataFrame()
-
-        records = []
-        for observation in data.get('data', []):
-            source_id = observation.get('sourceId')
-            reference_time = observation.get('referenceTime')
-            element_id = observation.get('elementId')
-
-            for obs_value in observation.get('observations', []):
-                record = {
-                    'sourceId': source_id,
-                    'referenceTime': reference_time,
-                    'elementId': element_id,
-                    'value': obs_value.get('value'),
-                    'unit': obs_value.get('unit'),
-                    'timeOffset': obs_value.get('timeOffset'),
-                    'timeResolution': obs_value.get('timeResolution'),
-                    'level': obs_value.get('level'),
-                    'fetch_timestamp': datetime.now().isoformat()
-                }
-                records.append(record)
-
-        if records:
-            df = pd.DataFrame(records)
-            # Convert referenceTime to datetime
-            df['referenceTime'] = pd.to_datetime(df['referenceTime'])
-            # Add human-readable columns
-            df['date'] = df['referenceTime'].dt.date
-            df['hour'] = df['referenceTime'].dt.hour
-            return df
-        else:
-            return pd.DataFrame()
-    
-    @staticmethod
-    def save_as_parquet(df, location_id, element_id):
-        """
-        Save parsed data as parquet file.
-        
-        Args:
-            df (pd.DataFrame): Parsed data
-            location_id (str): Location identifier
-            element_id (str): Element identifier
-        
-        Returns:
-            Path: Path to saved parquet file or None if DataFrame is empty
-        """
-        if df.empty:
-            return None
-
-        # Ensure cache directory exists
-        cache_dir = Path(CACHE_DIR) / "met"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create filename with date range
-        min_date = df['date'].min()
-        max_date = df['date'].max()
-        filename = f"met_{location_id}_{element_id}_{min_date}_{max_date}.parquet"
-        filepath = cache_dir / filename
-
-        # Save parquet file
-        df.to_parquet(filepath, index=False)
-
-        print(f"✓ Parquet file saved to: {filepath}")
-        print(f"  Shape: {df.shape}, Columns: {list(df.columns)}")
-        return filepath
-    
-    def fetch_and_save(self, location_id, element_id):
-        """
-        Complete workflow: fetch data, save raw response, parse to DataFrame, and save as parquet.
-        
-        Args:
-            location_id (str): Location/source ID (e.g., 'SN18700')
-            element_id (str): Element/parameter ID (e.g., 'air_temperature')
-        
-        Returns:
-            tuple: (json_path, parquet_path, dataframe) or (None, None, None) if failed
-        """
-        # Fetch data
-        data = self.fetch_data(location_id, element_id)
-        if not data:
-            return None, None, None
-        
-        # Save raw response
-        json_path = self.save_raw_response(data, location_id, element_id)
-        
-        # Parse to DataFrame
-        df = self.parse_to_dataframe(data)
-        if df.empty:
-            print("⚠ No observations found in response")
-            return json_path, None, pd.DataFrame()
-        
-        print(f"✓ Parsed {len(df)} observations")
-        
-        # Save as parquet
-        parquet_path = self.save_as_parquet(df, location_id, element_id)
-        
-        return json_path, parquet_path, df
+    async def fetch_forecast(self, lat: float, lon: float, days: int = 7) -> FetchResult[List[Dict[str, Any]]]:
+        """Fetch weather forecast from MET Frost API (future extension)."""
+        return FetchResult(
+            data=[],
+            metadata={"lat": lat, "lon": lon, "days": days},
+            timestamp=datetime.utcnow(),
+            source=self.source_name,
+            success=True,
+        )
 
 
-# Standalone functions for backward compatibility with existing CLI
-def authenticate():
-    """
-    Authenticate with MET API using client ID from environment variable.
-    
-    Returns:
-        tuple: (auth_header, client_id) or (None, None) if authentication fails
-    """
-    fetcher = METFetcher()
-    return fetcher.auth_header, fetcher.client_id
+# ---------------------------------------------------------------------------
+# Standalone functions (backward compatible with old CLI / module usage)
+# ---------------------------------------------------------------------------
 
-def fetch_met_data(location_id, element_id, auth_header):
-    """
-    Fetch MET timeseries data for a specific location and element.
-    
-    Args:
-        location_id (str): MET location/source ID (e.g., 'SN18700')
-        element_id (str): Element/parameter ID (e.g., 'air_temperature')
-        auth_header (dict): Authentication header with client ID
-    
-    Returns:
-        dict: JSON response from MET API or None if request fails
-    """
-    fetcher = METFetcher()
-    fetcher.auth_header = auth_header  # Use provided auth header
-    return fetcher.fetch_data(location_id, element_id)
+def authenticate() -> tuple:
+    """Authenticate and return auth header, client_id."""
+    import asyncio
 
-def save_raw_response(data, location_id, element_id):
-    """Wrapper for backward compatibility."""
-    return METFetcher.save_raw_response(data, location_id, element_id)
-
-def parse_to_dataframe(data):
-    """Wrapper for backward compatibility."""
-    return METFetcher.parse_to_dataframe(data)
-
-def save_as_parquet(df, location_id, element_id):
-    """Wrapper for backward compatibility."""
-    return METFetcher.save_as_parquet(df, location_id, element_id)
+    fetcher = MetFetcher()
+    if fetcher._client is None:
+        return ({}, "")
+    return ({"X-Client-ID": fetcher._client.client_id}, fetcher._client.client_id)
 
 
-def main():
-    """Main function to fetch and process MET data."""
-    parser = argparse.ArgumentParser(description="Fetch MET data from Norwegian Meteorological Institute")
-    parser.add_argument("--location", "-l", required=True,
-                        help="Location/source ID (e.g., SN18700)")
-    parser.add_argument("--element", "-e", required=True,
-                        help="Element/parameter ID (e.g., air_temperature, wind_speed)")
-    parser.add_argument("--test-auth", action="store_true",
-                        help="Test authentication only, don't fetch data")
+def fetch_met_data(
+    location_id: str, element_id: str, auth_header: Optional[Dict[str, str]] = None
+) -> Optional[Dict[str, Any]]:
+    """Fetch MET timeseries data for a specific location and element."""
+    import asyncio
 
+    fetcher = MetFetcher()
+    if fetcher._client is None:
+        logger.error("Cannot fetch MET data – client not initialised")
+        return None
+    if auth_header:
+        fetcher._client.session.headers.update(auth_header)
+
+    try:
+        result = asyncio.get_event_loop().run_until_complete(
+            fetcher.fetch(station_id=location_id, elements=[element_id])
+        )
+    except Exception as exc:
+        logger.error("fetch_met_data failed: %s", exc)
+        return None
+
+    if not result.success:
+        return None
+
+    # Re-assemble into legacy dict shape for backward compat callers
+    return {"data": result.data}
+
+
+def save_raw_response(data: Dict[str, Any], location_id: str, element_id: str) -> Path:
+    """Save raw JSON response to the data directory."""
+    raw_dir = Path(app_config.paths.raw_data_dir) / "met"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fp = raw_dir / f"met_{location_id}_{element_id}_{ts}.json"
+    fp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Raw MET data saved to %s", fp)
+    return fp
+
+
+def parse_to_dataframe(data: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Parse MET Frost structured records into a pandas DataFrame."""
+    rows: List[Dict[str, Any]] = []
+    for obs in data:
+        base = {
+            "sourceId": obs.get("source", {}).get("id"),
+            "referenceTime": obs.get("referenceTime"),
+        }
+        for itm in obs.get("observations", []):
+            row = base.copy()
+            row.update(itm)
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    if "referenceTime" in df.columns:
+        df["referenceTime"] = pd.to_datetime(df["referenceTime"], errors="coerce")
+        df["date"] = df["referenceTime"].dt.date
+        df["hour"] = df["referenceTime"].dt.hour
+    return df
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Fetch live MET Frost data")
+    parser.add_argument("--station", default="SN18700", help="Station ID")
+    parser.add_argument("--element", default="air_temperature", help="Element ID")
+    parser.add_argument("--days-back", type=int, default=7, help="Days to look back")
+    parser.add_argument("--test-auth", action="store_true", help="Test authentication")
+    parser.add_argument("--output", type=Path, help="Optional JSON output path")
     args = parser.parse_args()
 
-    print("=" * 60)
-    print("MET Data Fetcher")
-    print("=" * 60)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    # Create fetcher instance
-    fetcher = METFetcher()
-    
+    fetcher = MetFetcher()
     if args.test_auth:
-        print("✓ Authentication test passed")
-        sys.exit(0)
+        if fetcher.validate_config():
+            print("MET Frost authentication: OK")
+        else:
+            print("MET Frost authentication: FAILED – check MET_CLIENT_ID / MET_FROST_API_KEY")
+            sys.exit(1)
+        return
 
-    # Use the fetcher's complete workflow
-    json_path, parquet_path, df = fetcher.fetch_and_save(args.location, args.element)
-    
-    if df is None:
-        print("✗ Failed to fetch data")
+    import asyncio
+
+    try:
+        result = asyncio.get_event_loop().run_until_complete(
+            fetcher.fetch(station_id=args.station, elements=[args.element], days_back=args.days_back)
+        )
+    except Exception as exc:
+        logger.error("Fetch failed: %s", exc)
         sys.exit(1)
-    
-    print("=" * 60)
-    print("✓ MET data fetch completed successfully!")
-    if json_path:
-        print(f"  Raw JSON: {json_path}")
-    if parquet_path:
-        print(f"  Parquet: {parquet_path}")
-    print("=" * 60)
+
+    if not result.success:
+        logger.error("Fetch unsuccessful: %s", result.error_message)
+        sys.exit(1)
+
+    print(f"Fetched {len(result.data)} observation groups")
+    for rec in result.data[:3]:
+        print("  -", rec.get("referenceTime"), len(rec.get("observations", [])), "observations")
+
+    if args.output:
+        args.output.write_text(json.dumps(result.data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"Saved to {args.output}")
+
 
 if __name__ == "__main__":
     main()

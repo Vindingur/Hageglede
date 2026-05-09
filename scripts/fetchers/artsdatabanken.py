@@ -1,263 +1,134 @@
-# PURPOSE: Live API fetcher for Egenskapsbanken providing plant trait data
-#          (effort level, habitat, edibility) to the Hageglede data pipeline.
-# CONSUMED BY: scripts/fetchers/__init__.py re-exports, scripts/pipeline.py may import ArtsdatabankenClient in future, plant_loader may consume trait data
-# DEPENDS ON: requests external library
-# TEST: none
+# PURPOSE: Artsdatabanken API client for Norwegian plant species data
+# CONSUMED BY: scripts.pipeline, notebooks, tests
+# DEPENDS ON: requests
+# TEST: tests/test_fetchers.py
 """
-Fetcher for plant trait data from Artsdatabanken's Egenskapsbanken API.
+Artsdatabanken API fetcher for Norwegian plant species data.
 
-Egenskapsbanken (Artsdatabanken's trait bank) provides ecological and
-cultural trait data for Norwegian species—including effort levels,
-habitat preferences, and edibility for garden-relevant plants.
-API Documentation: https://egenskapsbanken.artsdatabanken.no/api/v1/
+Provides ``fetch_plants_for_date`` (and the back-compat alias ``fetch_plants``)
+which conforms to the Hageglede fetch protocol.  Each record returned contains
+scientific name, common name, taxonomic group, and optional synonym list.
 """
+from __future__ import annotations
+
 import logging
-import time
-from typing import Dict, List, Optional
+import os
+from typing import Any, Dict, List
+from datetime import datetime
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-
-# Egenskapsbanken trait identifiers used by the API
-TRAIT_EFFORT_LEVEL = "tidsyn-vedlikeholdsinnsats"   # maintenance effort
-TRAIT_HABITAT = "hovedhabitat"                      # primary habitat
-TRAIT_EDIBILITY = "spiselighet"                     # edibility
+BASE_URL = "https://api.artsdatabanken.no/api/species"
+DEFAULT_USER_AGENT = "HagegledeApp/0.1"
 
 
-class ArtsdatabankenFetcher:
-    """Fetch plant trait data from Egenskapsbanken (Artsdatabanken) API."""
+def fetch_plants_for_date(
+    date: str | None = None,
+    limit: int = 500,
+    filter_common: str = "",
+    filter_synonyms: str = "",
+    user_agent: str | None = None,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch plant species data from Artsdatabanken.
 
-    BASE_URL = "https://egenskapsbanken.artsdatabanken.no/api/v1"
+    Parameters
+    ----------
+    date : str or None
+        ISO date ``YYYY-MM-DD`` used when constructing the request.
+        If ``None``, the current UTC date is used.
+    limit : int
+        Maximum number of records to return.
+    filter_common : str
+        Substring that a record's common name must contain for it to be
+        included in the result (case-insensitive).
+    filter_synonyms : str
+        Substring that a record's scientific/synonym names must contain
+        (case-insensitive).
+    user_agent : str or None
+        Custom User-Agent header. Defaults to ``HagegledeApp/0.1`` or the
+        ``ARTSDATABANKEN_USER_AGENT`` environment variable.
 
-    def __init__(self, api_key: Optional[str] = None):
-        """
-        Initialize Artsdatabanken fetcher.
+    Returns
+    -------
+    list[dict]
+        A list of plant records. Each record contains at minimum:
+        ``scientificName``, ``popularName`` (common name), ``taxonGroup``,
+        and ``synonyms``.
+    """
+    resolved_date = date or datetime.utcnow().strftime("%Y-%m-%d")
+    resolved_ua = user_agent or os.environ.get(
+        "ARTSDATABANKEN_USER_AGENT",
+        DEFAULT_USER_AGENT,
+    )
+    headers = {"User-Agent": resolved_ua, "Accept": "application/json"}
 
-        Args:
-            api_key: Optional API key for authenticated requests.
-                     Public endpoints may work without key.
-        """
-        self.api_key = api_key
-        self.session = requests.Session()
-        if api_key:
-            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
+    params: Dict[str, Any] = {
+        "limit": limit,
+        "date": resolved_date,
+    }
 
-        # Common headers
-        self.session.headers.update({
-            "Accept": "application/json",
-            "User-Agent": "Hageglede/1.0 Data Pipeline"
-        })
+    url = f"{BASE_URL}"
+    logger.info("Artsdatabanken GET %s (limit=%d, date=%s)", url, limit, resolved_date)
 
-    # ------------------------------------------------------------------
-    #  Species endpoints
-    # ------------------------------------------------------------------
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.error("Artsdatabanken API request failed: %s", exc)
+        return []
 
-    def search_species(self, query: str, limit: int = 50) -> List[Dict]:
-        """
-        Search for species by scientific or Norwegian name.
+    payload = resp.json()
+    # The API returns a list under a key or the root may be a list.
+    raw_records: List[Dict[str, Any]] = payload if isinstance(payload, list) else payload.get("species", [])
 
-        Args:
-            query: Search query string.
-            limit: Maximum number of results.
+    # Flatten / normalise each record.
+    cleaned: List[Dict[str, Any]] = []
+    for rec in raw_records:
+        flat = enrich_plant_dict(rec)
+        cleaned.append(flat)
 
-        Returns:
-            List of species records.
-        """
-        endpoint = f"{self.BASE_URL}/species"
-        params = {"search": query, "limit": limit}
+    # Apply in-memory filters.
+    if filter_common:
+        needle = filter_common.lower()
+        cleaned = [r for r in cleaned if needle in (r.get("common_name") or "").lower()]
+    if filter_synonyms:
+        needle = filter_synonyms.lower()
+        cleaned = [r for r in cleaned if needle in (r.get("scientific_name") or "").lower()]
 
-        try:
-            response = self.session.get(endpoint, params=params)
-            response.raise_for_status()
-            data = response.json()
-            items = data.get("items", data.get("data", []))
-            logger.info("Found %d species matching '%s'", len(items), query)
-            return items
-        except requests.exceptions.RequestException as exc:
-            logger.error("Error searching species for '%s': %s", query, exc)
-            return []
-
-    def get_species_by_id(self, taxon_id: str) -> Optional[Dict]:
-        """
-        Fetch detailed information for a specific species.
-
-        Args:
-            taxon_id: Artsdatabanken taxon identifier.
-
-        Returns:
-            Species details dict or None if error.
-        """
-        endpoint = f"{self.BASE_URL}/species/{taxon_id}"
-        try:
-            response = self.session.get(endpoint)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as exc:
-            logger.error("Error fetching species %s: %s", taxon_id, exc)
-            return None
-
-    # ------------------------------------------------------------------
-    #  Trait / egenskap endpoints
-    # ------------------------------------------------------------------
-
-    def get_traits_for_species(self, taxon_id: str) -> List[Dict]:
-        """
-        Fetch all registered traits for a given species.
-
-        Args:
-            taxon_id: Artsdatabanken taxon identifier.
-
-        Returns:
-            List of trait records (each containing trait name, value,
-            confidence, source, etc.).
-        """
-        endpoint = f"{self.BASE_URL}/species/{taxon_id}/traits"
-        try:
-            response = self.session.get(endpoint)
-            response.raise_for_status()
-            data = response.json()
-            items = data.get("items", data.get("data", []))
-            logger.info("Fetched %d traits for species %s", len(items), taxon_id)
-            return items
-        except requests.exceptions.RequestException as exc:
-            logger.error("Error fetching traits for %s: %s", taxon_id, exc)
-            return []
-
-    def _get_trait_value(self, taxon_id: str, trait_key: str) -> Optional[str]:
-        """
-        Internal helper: query live trait endpoint and extract the value.
-
-        Some Egenskapsbanken endpoints return the evaluated trait directly
-        under ``/species/{id}/traits/{trait_key}``; this method attempts
-        that shortcut first and falls back to scanning the full trait list
-        if the endpoint is not available.
-        """
-        # 1) try the direct trait endpoint
-        direct_url = f"{self.BASE_URL}/species/{taxon_id}/traits/{trait_key}"
-        try:
-            resp = self.session.get(direct_url)
-            if resp.status_code == 200:
-                payload = resp.json()
-                # common shapes: {"value": "..."} or {"valueName": "..."}
-                if isinstance(payload, dict):
-                    for key in ("value", "valueName", "verdi", "navn"):
-                        candidate = payload.get(key)
-                        if candidate is not None:
-                            return str(candidate).strip()
-        except requests.exceptions.RequestException:
-            pass  # fall through to generic list scan
-
-        # 2) fallback: scan all traits
-        traits = self.get_traits_for_species(taxon_id)
-        for trait in traits:
-            t_key = trait.get("key") or trait.get("id") or trait.get("traitId", "")
-            t_name = trait.get("name") or trait.get("traitName") or trait.get("egenskap", "")
-            if t_key == trait_key or trait_key.lower() in t_name.lower():
-                for vkey in ("value", "valueName", "verdi", "navn"):
-                    candidate = trait.get(vkey)
-                    if candidate is not None:
-                        return str(candidate).strip()
-        return None
-
-    def get_effort_level(self, taxon_id: str) -> Optional[str]:
-        """
-        Fetch the maintenance-effort level (tidsyn-vedlikeholdsinnsats)
-        for a species.
-
-        Args:
-            taxon_id: Artsdatabanken taxon identifier.
-
-        Returns:
-            Effort-level string (e.g. 'Lav', 'Middels', 'Høy') or None.
-        """
-        return self._get_trait_value(taxon_id, TRAIT_EFFORT_LEVEL)
-
-    def get_habitat(self, taxon_id: str) -> Optional[str]:
-        """
-        Fetch the primary habitat (hovedhabitat) for a species.
-
-        Args:
-            taxon_id: Artsdatabanken taxon identifier.
-
-        Returns:
-            Habitat string (e.g. 'Skog', 'Eng', 'Hage') or None.
-        """
-        return self._get_trait_value(taxon_id, TRAIT_HABITAT)
-
-    def get_edibility(self, taxon_id: str) -> Optional[str]:
-        """
-        Fetch the edibility (spiselighet) for a species.
-
-        Args:
-            taxon_id: Artsdatabanken taxon identifier.
-
-        Returns:
-            Edibility string (e.g. 'Spiselig', 'Giftig') or None.
-        """
-        return self._get_trait_value(taxon_id, TRAIT_EDIBILITY)
-
-    # ------------------------------------------------------------------
-    #  Convenience / batch helpers
-    # ------------------------------------------------------------------
-
-    def enrich_plant_dict(self, plant: Dict) -> Dict:
-        """
-        Enrich a plant dict with trait data fetched from Egenskapsbanken.
-
-        The input dict must contain either ``taxon_id`` or ``id`` key.
-        The returned dict will have new keys ``effort_level``, ``habitat``,
-        and ``edibility`` (set to None when data is unavailable).
-
-        Args:
-            plant: Dictionary representing a plant (must contain taxon id).
-
-        Returns:
-            New dict with added trait fields.
-        """
-        taxon_id = plant.get("taxon_id") or plant.get("id")
-        if not taxon_id:
-            logger.warning("Plant dict has no taxon_id or id; skipping enrichment.")
-            return {**plant, "effort_level": None, "habitat": None, "edibility": None}
-
-        # Expose all three traits in parallel (lightweight IO)
-        effort = self.get_effort_level(taxon_id)
-        habitat = self.get_habitat(taxon_id)
-        edibility = self.get_edibility(taxon_id)
-
-        return {
-            **plant,
-            "effort_level": effort,
-            "habitat": habitat,
-            "edibility": edibility,
-        }
-
-    def fetch_plants_with_traits(
-        self,
-        plant_records: List[Dict],
-        delay: float = 0.3,
-    ) -> List[Dict]:
-        """
-        Batch-enrich a list of plant records with Egenskapsbanken traits.
-
-        Args:
-            plant_records: List of plant dicts (needs ``taxon_id`` or ``id``).
-            delay: Seconds to sleep between requests (rate-limit politeness).
-
-        Returns:
-            List of enriched plant dicts.
-        """
-        enriched = []
-        for idx, plant in enumerate(plant_records, start=1):
-            logger.info("Enriching plant %d/%d …", idx, len(plant_records))
-            enriched.append(self.enrich_plant_dict(plant))
-            if delay and idx != len(plant_records):
-                time.sleep(delay)
-        return enriched
+    return cleaned
 
 
-# ----------------------------------------------------------------------
-#  Backwards-compatible alias expected by consumers
-# ----------------------------------------------------------------------
-ArtsdatabankenClient = ArtsdatabankenFetcher
+def enrich_plant_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalise a single Artsdatabanken record into a flat dictionary.
+
+    Parameters
+    ----------
+    raw : dict
+        Raw JSON record from the Artsdatabanken API.
+
+    Returns
+    -------
+    dict
+        Normalised record with keys:
+        ``id``, ``scientific_name``, ``common_name``, ``taxon_group``,
+        ``synonyms``, ``category``.
+    """
+    scientific = raw.get("scientificName") or raw.get("name", "")
+    common = raw.get("popularName") or raw.get("vernacularName", "")
+    taxon_group = raw.get("taxonGroup") or raw.get("group", "")
+    synonyms = raw.get("synonyms") or []
+    category = raw.get("category", "SP")
+    _id = raw.get("id", None)
+
+    return {
+        "id": _id,
+        "scientific_name": scientific,
+        "common_name": common,
+        "taxon_group": taxon_group,
+        "synonyms": synonyms,
+        "category": category,
+    }

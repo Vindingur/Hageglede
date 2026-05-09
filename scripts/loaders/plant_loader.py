@@ -1,154 +1,161 @@
-#!/usr/bin/env python3
-"""Plant data loader aligned with the unified Plant table schema."""
-# PURPOSE: SQLite upsert loader that inserts into the aligned Plant table
-#          (postcode->zone->12-20 plants flow).  Accepts a DataFrame with
-#          columns matching the schema and performs upsert by species name.
-# CONSUMED BY: scripts/pipeline.py (via load_plant_data), scripts/loaders/__init__.py
-# DEPENDS ON: src/hageglede/db/schema.py (Plant model), src/hageglede/db/session.py (get_session)
-# TEST: none
+# PURPOSE: Load a tidy plant DataFrame into the local SQLite database via upsert
+# CONSUMED BY: scripts.pipeline, notebooks, tests
+# DEPENDS ON: pandas
+# TEST: tests/test_loaders.py
+"""
+Plant data loader.
 
-import sys
-import argparse
+Takes a **pandas DataFrame** produced by
+:pyfunc:`scripts.transformers.plants.transform_plants_records` and upserts
+it into a SQLite ``plants`` table.
+
+No CSV references remain in this module.
+"""
+from __future__ import annotations
+
+import json
 import logging
+import os
 from pathlib import Path
+from typing import Any, Dict, List
 
-# Add project root to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+import pandas as pd
 
-import pandas as pd  # noqa: E402
-from src.hageglede.db.session import get_session  # noqa: E402
-from src.hageglede.db.schema import Plant  # noqa: E402
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Columns expected in the transformed DataFrame that map 1-to-1 to Plant model fields.
-_PLANT_COLUMNS = [
-    "species",
-    "family",
-    "effort_level",
-    "climate_zone_min",
-    "climate_zone_max",
-    "yield_rating",
-    "meal_ideas",
-    "sun_needs",
-    "water_needs",
-    "soil_preference",
-    "days_to_maturity",
-    "image_url",
-]
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "hageglede.db"
+
+_SQL_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS plants (
+    id                INTEGER,
+    scientific_name   TEXT PRIMARY KEY,
+    common_name       TEXT,
+    taxon_group       TEXT,
+    synonyms          TEXT,
+    category          TEXT,
+    ingested_at       TEXT
+);
+"""
+
+_SQL_UPSERT = """
+INSERT INTO plants (
+    id, scientific_name, common_name, taxon_group,
+    synonyms, category, ingested_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(scientific_name) DO UPDATE SET
+    id=excluded.id,
+    common_name=excluded.common_name,
+    taxon_group=excluded.taxon_group,
+    synonyms=excluded.synonyms,
+    category=excluded.category,
+    ingested_at=excluded.ingested_at;
+"""
 
 
-def _coerce_str(value) -> str:
-    """Return a string or None if value is effectively empty."""
-    if pd.isna(value) or value is None or str(value).strip() == "":
+def _get_connection(db_path: str):
+    """Return a DBAPI connection to the SQLite database."""
+    import sqlite3
+    conn = sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+
+def init_plants_table(db_path: str | Path = DEFAULT_DB_PATH) -> None:
+    """Create the ``plants`` table if it does not yet exist."""
+    with _get_connection(str(db_path)) as conn:
+        conn.execute(_SQL_CREATE_TABLE)
+        conn.commit()
+    logger.info("plants table initialised at %s", db_path)
+
+
+def _enforce_str(val: Any) -> str | None:
+    """Coerce value to str, or None if missing / NaN."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
-    return str(value).strip()
+    return str(val)
 
 
-def _coerce_int(value) -> int:
-    """Return an int or None."""
-    if pd.isna(value) or value is None or value == "":
-        return None
-    try:
-        return int(float(value))
-    except (ValueError, TypeError):
-        return None
-
-
-def load_plant_data(df: pd.DataFrame):
+def load_plant_df(
+    df: pd.DataFrame,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> None:
     """
-    Upsert plant records from a transformed DataFrame into the SQLite Plant table.
+    Upsert a plant DataFrame into SQLite.
 
-    Matching is performed on ``species`` (exact string).  Existing rows are
-    updated in-place; missing rows are inserted.
-
-    The DataFrame is expected to carry the aligned columns defined in
-    ``_PLANT_COLUMNS``.  Extra columns are ignored.
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame with at minimum columns matching the ``plants`` schema.
+    db_path : str or Path
+        Path to the SQLite database.
     """
-    if df.empty:
-        logger.warning("Received empty DataFrame — nothing to load.")
+    if df is None or df.empty:
+        logger.warning("load_plant_df called with empty DataFrame; nothing to load.")
         return
 
-    # Normalise any None/NaN cells to Python None so the DB handles them uniformly.
-    df = df.replace(pd.NA, None).replace({float("nan"): None})
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    init_plants_table(db_path)
 
-    with get_session() as session:
-        upserted = 0
-        inserted = 0
+    cols = [
+        "id",
+        "scientific_name",
+        "common_name",
+        "taxon_group",
+        "synonyms",
+        "category",
+        "ingested_at",
+    ]
+    rows = df.copy()
 
-        for _, row in df.iterrows():
-            species = _coerce_str(row.get("species"))
-            if not species:
-                logger.warning("Skipping row with no species name: %s", row.to_dict())
-                continue
+    for col in ["id"]:
+        if col in rows.columns:
+            rows[col] = pd.to_numeric(rows[col], errors="coerce").astype("Int64")
 
-            plant = session.query(Plant).filter_by(species=species).first()
+    for col in cols:
+        if col not in rows.columns:
+            rows[col] = None
 
-            # Build a dict of scalar columns
-            fields = {
-                "family": _coerce_str(row.get("family")),
-                "effort_level": _coerce_str(row.get("effort_level")),
-                "climate_zone_min": _coerce_str(row.get("climate_zone_min")),
-                "climate_zone_max": _coerce_str(row.get("climate_zone_max")),
-                "yield_rating": _coerce_str(row.get("yield_rating")),
-                "meal_ideas": _coerce_str(row.get("meal_ideas")),
-                "sun_needs": _coerce_str(row.get("sun_needs")),
-                "water_needs": _coerce_str(row.get("water_needs")),
-                "soil_preference": _coerce_str(row.get("soil_preference")),
-                "days_to_maturity": _coerce_int(row.get("days_to_maturity")),
-                "image_url": _coerce_str(row.get("image_url")),
-            }
+    # Drop rows where scientific_name is missing (primary key).
+    rows = rows[rows["scientific_name"].notna()]
 
-            if plant is None:
-                plant = Plant(species=species, **fields)
-                session.add(plant)
-                inserted += 1
-                logger.info("Inserted new plant: %s", species)
-            else:
-                for col, val in fields.items():
-                    setattr(plant, col, val)
-                upserted += 1
-                logger.info("Updated existing plant: %s", species)
+    data_tuples = rows[cols].to_records(index=False).tolist()
 
-        session.commit()
-        logger.info(
-            "Plant load complete — inserted=%d, updated=%d, total rows=%d",
-            inserted,
-            upserted,
-            len(df),
-        )
+    if not data_tuples:
+        logger.info("No valid plant rows to insert after filtering.")
+        return
+
+    with _get_connection(str(db_path)) as conn:
+        conn.executemany(_SQL_UPSERT, data_tuples)
+        conn.commit()
+
+    logger.info("Inserted / updated %d plant rows.", len(data_tuples))
 
 
-def load_plant_csv(file_path: str):
-    """Load plant data from a CSV file."""
-    df = pd.read_csv(file_path)
-    load_plant_data(df)
+def load_plant_records(
+    records: List[Dict[str, Any]],
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> None:
+    """
+    Convenience entrypoint for raw dicts (e.g. direct from fetcher).
+
+    Wraps the records in a DataFrame and forwards to :pyfunc:`load_plant_df`.
+    """
+    if not records:
+        logger.warning("load_plant_records called with empty list.")
+        return
+    df = pd.DataFrame(records)
+    load_plant_df(df, db_path)
 
 
-def load_plant_json(file_path: str):
-    """Load plant data from a JSON file (list of records)."""
-    import json
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    df = pd.DataFrame(data)
-    load_plant_data(df)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Load plant data into the unified gardening database")
-    parser.add_argument("--csv", help="Path to CSV file with plant data")
-    parser.add_argument("--json", help="Path to JSON file with plant data")
+def main() -> None:
+    """CLI entrypoint to initialise the plants table (no CSV input)."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Initialise plants SQLite table.")
+    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="Path to SQLite DB")
     args = parser.parse_args()
-
-    if args.csv:
-        load_plant_csv(args.csv)
-    elif args.json:
-        load_plant_json(args.json)
-    else:
-        parser.print_help()
+    init_plants_table(args.db)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

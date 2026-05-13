@@ -23,9 +23,22 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.config import DATABASE_PATH, FROST_CONFIG  # noqa: E402
+from scripts.config import ConfigManager  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Lazy-load configuration so callers can still override paths if desired
+_config_manager = ConfigManager()
+_config = _config_manager.load()
+
+
+def _get_met_source() -> dict:
+    """Return MET source configuration dict for location defaults."""
+    source = _config_manager.get_source("MET")
+    if source is None:
+        return {}
+    return {"base_url": source.url, "timeout": source.timeout, **source.params}
+
 
 # ── concrete fetchers ──────────────────────────────────────────────────────
 def _import_fetcher(mod_name: str):
@@ -145,7 +158,7 @@ def enrich_plants(env: dict | None = None) -> int:
     func = getattr(_pl, "enrich_and_update_plants", None) or getattr(_pl, "enrich", None)
     if func is None:
         return 0
-    return func(env or {}, str(DATABASE_PATH))
+    return func(env or {}, _config.database.path)
 
 
 # ── pipeline entry ─────────────────────────────────────────────────────────
@@ -160,8 +173,8 @@ def run_pipeline(
       plants:   Artsdatabanken API → plants transformer → plant_loader
     Returns summary dict with record counts.
     """
-    db_path = db_path or str(DATABASE_PATH)
-    location = location or FROST_CONFIG or {}
+    db_path = db_path or _config.database.path
+    location = location or _get_met_source()
 
     lat = float(location.get("lat", 59.9))
     lon = float(location.get("lon", 10.8))

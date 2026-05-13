@@ -1,6 +1,6 @@
 # PURPOSE: Orchestrate weather + plant data fetch → transform → SQLite load
 # CONSUMED BY: main entry point, CLI, scheduled jobs
-# DEPENDS ON: scripts.fetchers.met, scripts.fetchers.artsdbanken, scripts.transformers.climate, scripts.transformers.plants, scripts.loaders.weather_loader, scripts.loaders.plant_loader, config.settings
+# DEPENDS ON: scripts.config, scripts.fetchers.met, scripts.fetchers.artsdbanken, scripts.transformers.climate, scripts.transformers.plants, scripts.loaders.weather_loader, scripts.loaders.plant_loader
 # TEST: none
 """
 ETL orchestration:
@@ -23,7 +23,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from config.settings import DATABASE_PATH, MET_API_CONFIG, ARTSDB_API_CONFIG  # noqa: E402
+from scripts.config import DATABASE_PATH, FROST_CONFIG  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ def run_pipeline(
     Returns summary dict with record counts.
     """
     db_path = db_path or str(DATABASE_PATH)
-    location = location or MET_API_CONFIG or {}
+    location = location or FROST_CONFIG or {}
 
     lat = float(location.get("lat", 59.9))
     lon = float(location.get("lon", 10.8))

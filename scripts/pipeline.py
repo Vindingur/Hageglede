@@ -1,218 +1,153 @@
-# PURPOSE: Orchestrates the ETL pipeline and must import configuration from the actual scripts.config module using correct symbol names.
-# CONSUMED BY: scripts/__main__.py, scheduled jobs, CLI entry points
-# DEPENDS ON: scripts.config, scripts.fetchers.met, scripts.fetchers.artsdbanken, scripts.transformers.climate, scripts.transformers.plants, scripts.loaders.weather_loader, scripts.loaders.plant_loader
-# TEST: none
+#!/usr/bin/env python3
 """
-ETL orchestration:
-1) fetch weather from MET API,
-2) fetch plant data from Artsdatabanken API,
-3) transform via climate/plants modules,
-4) load into SQLite tables.
-No CSV references.
-"""
-from __future__ import annotations
+Pipeline module for fetching and processing weather and species data.
 
-import importlib
+Coordinates data collection from MET Frost and Artsdatabanken APIs,
+loads results into the Hageglede SQLite database, and exposes a CLI
+entry-point suitable for cron / scheduler invocation.
+"""
+
+import asyncio
 import logging
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
-import pandas as pd
 
-# Ensure project root is on PYTHONPATH
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+# Ensure scripts/ is on the path so imports work when the CWD is not the
+# repository root (e.g. cron, systemd, Docker).
+_repo_root = Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
 
-from scripts.config import DATABASE_PATH, FROST_CONFIG  # noqa: E402
+from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG
+from utils.api_clients import FrostAPI, ArtsdatabankenAPI
+from scripts.data_collection import collect_weather_data, collect_species_data
+from scripts.data_processing import process_weather_batch, process_species_batch
+from scripts.database import get_db_session
+from scripts.monitoring import PipelineMonitor
 
 logger = logging.getLogger(__name__)
 
-# ── concrete fetchers ──────────────────────────────────────────────────────
-def _import_fetcher(mod_name: str):
-    try:
-        return importlib.import_module(f"scripts.fetchers.{mod_name}")
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Fetcher %s unavailable: %s", mod_name, exc)
-        return None
 
-_m = _import_fetcher("met")
-_a = _import_fetcher("artsdbanken")
+class DataPipeline:
+    """Orchestrates weather and species data collection cycles."""
 
-# ── concrete transformers ──────────────────────────────────────────────────
-def _import_transformer(mod_name: str):
-    try:
-        return importlib.import_module(f"scripts.transformers.{mod_name}")
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Transformer %s unavailable: %s", mod_name, exc)
-        return None
+    def __init__(self):
+        self.frost = FrostAPI(FROST_CONFIG)
+        self.artsdb = ArtsdatabankenAPI()
+        self.monitor = PipelineMonitor()
+        self.db_path = Path(DATABASE_PATH)
+        self.data_dir = Path(DATA_DIR)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
 
-_ct = _import_transformer("climate")
-_pt = _import_transformer("plants")
+    async def run_cycle(self) -> dict:
+        """Run a single collection / processing cycle.
 
-# ── concrete loaders ───────────────────────────────────────────────────────
-def _import_loader(mod_name: str):
-    try:
-        return importlib.import_module(f"scripts.loaders.{mod_name}")
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Loader %s unavailable: %s", mod_name, exc)
-        return None
+        Returns a status dict with counts and any error messages.
+        """
+        cycle_id = datetime.utcnow().isoformat()
+        self.monitor.start_cycle(cycle_id)
+        results = {"weather": 0, "species": 0, "errors": []}
 
-_wl = _import_loader("weather_loader")
-_pl = _import_loader("plant_loader")
+        try:
+            # Concurrent data fetching -------------------------------
+            weather_items, species_items = await asyncio.gather(
+                self._collect_weather(),
+                self._collect_species(),
+            )
 
+            # Sequential processing / persistence ----------------------
+            results["weather"] = await process_weather_batch(
+                weather_items, db_path=str(self.db_path)
+            )
+            results["species"] = await process_species_batch(
+                species_items, db_path=str(self.db_path)
+            )
 
-def fetch_weather_posts(lat: float, lon: float, alt: float | None = None) -> list[dict]:
-    """Delegate to MET fetcher (functions in that module may be renamed)."""
-    if _m is None:
-        return []
-    func = getattr(_m, "fetch_weather_posts", None) or getattr(_m, "fetch_daily_forecast", None)
-    if func is None:
-        logger.error("No weather fetch function found in scripts.fetchers.met")
-        return []
-    kwargs = {"lat": lat, "lon": lon}
-    if alt is not None:
-        kwargs["alt"] = alt
-    return func(**kwargs)
+            self.monitor.record_success(cycle_id, results)
+        except Exception as exc:
+            logger.exception("Pipeline cycle %s failed", cycle_id)
+            results["errors"].append(str(exc))
+            self.monitor.record_failure(cycle_id, exc)
+        finally:
+            self.monitor.end_cycle(cycle_id)
 
+        return results
 
-def fetch_plant_data(**kwargs) -> list[dict]:
-    """Delegate to Artsdatabanken fetcher."""
-    if _a is None:
-        return []
-    func = getattr(_a, "fetch_plant_data", None) or getattr(_a, "fetch_plants_for_date", None)
-    if func is None:
-        logger.error("No plant fetch function found in scripts.fetchers.artsdbanken")
-        return []
-    return func(**kwargs)
+    def health_check(self) -> dict:
+        """Quick diagnostic: can we reach the DB and both APIs?"""
+        checks = {
+            "db": False,
+            "frost": False,
+            "artsdatabanken": False,
+        }
 
+        try:
+            session = get_db_session(str(self.db_path))
+            session.execute("SELECT 1")
+            session.close()
+            checks["db"] = True
+        except Exception:
+            pass
 
-def transform_climate_records(raw: list[dict]) -> pd.DataFrame:
-    """Delegate to climate transformer."""
-    if _ct is None:
-        return pd.DataFrame()
-    func = getattr(_ct, "transform_climate_records", None) or getattr(
-        _ct, "transform_climate_data", None
-    ) or getattr(_ct, "transform_weather", None)
-    if func is None:
-        logger.error("No climate transform function found")
-        return pd.DataFrame()
-    return func(raw)
+        try:
+            checks["frost"] = self.frost.is_healthy()
+        except Exception:
+            pass
 
+        try:
+            checks["artsdatabanken"] = self.artsdb.is_healthy()
+        except Exception:
+            pass
 
-def transform_plant_records(raw: list[dict]) -> pd.DataFrame:
-    """Delegate to plant transformer."""
-    if _pt is None:
-        return pd.DataFrame()
-    func = getattr(_pt, "transform_plant_records", None) or getattr(
-        _pt, "transform_plants_records", None
-    ) or getattr(_pt, "transform_plants", None)
-    if func is None:
-        logger.error("No plant transform function found")
-        return pd.DataFrame()
-    return func(raw)
+        return checks
 
+    async def _collect_weather(self):
+        """Fetch recent MET Frost observations for the configured station."""
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=24)
+        station_id = FROST_CONFIG.get("station_id", "SN18700")
 
-def load_weather_to_sqlite(df: pd.DataFrame, **kwargs) -> int:
-    """Delegate to weather loader."""
-    if _wl is None:
-        return 0
-    func = getattr(_wl, "load_weather_to_sqlite", None) or getattr(
-        _wl, "load_weather_df", None
-    ) or getattr(_wl, "load_weather_data", None)
-    if func is None:
-        logger.error("No weather loader function found")
-        return 0
-    return func(df, **kwargs)
+        raw = await self.frost.get_observations(
+            station_id=station_id,
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+        )
+        return raw.get("data", {}).get("tseries", [])
+
+    async def _collect_species(self):
+        """Fetch species observations from Artsdatabanken."""
+        return await self.artsdb.search_species(
+            query="rosa rugosa",
+            limit=50,
+        )
 
 
-def load_plants_to_sqlite(df: pd.DataFrame, **kwargs) -> int:
-    """Delegate to plant loader."""
-    if _pl is None:
-        return 0
-    func = getattr(_pl, "load_plants_to_sqlite", None) or getattr(
-        _pl, "load_plant_df", None
-    ) or getattr(_pl, "load_plant_data", None)
-    if func is None:
-        logger.error("No plant loader function found")
-        return 0
-    return func(df, **kwargs)
-
-
-def enrich_plants(env: dict | None = None) -> int:
-    """Optional enrichment step; delegates to loader enrichment if present."""
-    if _pl is None:
-        return 0
-    func = getattr(_pl, "enrich_and_update_plants", None) or getattr(_pl, "enrich", None)
-    if func is None:
-        return 0
-    return func(env or {}, str(DATABASE_PATH))
-
-
-# ── pipeline entry ─────────────────────────────────────────────────────────
-def run_pipeline(
-    *,
-    db_path: str | None = None,
-    location: dict | None = None,
-) -> dict:
-    """
-    Run full ETL:
-      weather:  MET API → climate transformer → weather_loader
-      plants:   Artsdatabanken API → plants transformer → plant_loader
-    Returns summary dict with record counts.
-    """
-    db_path = db_path or str(DATABASE_PATH)
-    location = location or FROST_CONFIG or {}
-
-    lat = float(location.get("lat", 59.9))
-    lon = float(location.get("lon", 10.8))
-    alt = location.get("alt")
-
-    # Ensure tables exist
-    if _wl is not None:
-        init = getattr(_wl, "init_weather_table", None)
-        if init:
-            init(db_path)
-    if _pl is not None:
-        init = getattr(_pl, "init_plants_table", None)
-        if init:
-            init(db_path)
-
-    # Weather branch
-    weather_raw = fetch_weather_posts(lat, lon, alt)
-    logger.info("Fetched %d weather posts", len(weather_raw))
-
-    weather_df = transform_climate_records(weather_raw)
-    weather_count = 0
-    if not weather_df.empty:
-        weather_count = load_weather_to_sqlite(weather_df, db_path=db_path)
-        logger.info("Loaded %d weather records", weather_count)
-
-    # Plant branch
-    plant_raw = fetch_plant_data(
-        fields="TaxonId,Name,Author,RiskStatus,RiskAssessment.Id,ModelArea.Id"
+def main() -> int:
+    """Run one pipeline cycle from the command line."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     )
-    logger.info("Fetched %d raw plant records", len(plant_raw))
 
-    plant_df = transform_plant_records(plant_raw)
-    plant_count = 0
-    if not plant_df.empty:
-        plant_count = load_plants_to_sqlite(plant_df, db_path=db_path)
-        logger.info("Loaded %d plant records", plant_count)
+    pipeline = DataPipeline()
+    health = pipeline.health_check()
+    logger.info("Health check: %s", health)
 
-    # Optional enrichment
-    enrich_count = enrich_plants()
+    if not all(health.values()):
+        logger.error("One or more dependencies are unhealthy — aborting.")
+        return 1
 
-    return {
-        "weather_fetched": len(weather_raw),
-        "weather_loaded": weather_count,
-        "plants_fetched": len(plant_raw),
-        "plants_loaded": plant_count,
-        "plants_enriched": enrich_count,
-        "db_path": db_path,
-    }
+    results = asyncio.run(pipeline.run_cycle())
+    logger.info("Pipeline cycle complete: %s", results)
+
+    failed = results.get("errors", [])
+    if failed:
+        logger.error("Cycle finished with %d error(s): %s", len(failed), failed)
+        return 2
+
+    return 0
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    summary = run_pipeline()
-    print(summary)
+    sys.exit(main())

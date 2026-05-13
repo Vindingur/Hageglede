@@ -1,27 +1,30 @@
-# PURPOSE: Main data collection pipeline orchestrating MET Frost and Artsdatabanken API ingestion
-#          into the Hageglede SQLite database.  Fixes the broken config import that referenced a
-#          missing config.settings package.
-# CONSUMED BY: CLI entry-point, cron / scheduler
-# DEPENDS ON: scripts.config (ConfigManager), scripts.data_collection, scripts.data_processing, utils.api_clients
-# TEST: tests/test_pipeline.py
+#!/usr/bin/env python3
+"""
+Pipeline module for fetching and processing weather and species data.
+
+Coordinates data collection from MET Frost and Artsdatabanken APIs,
+loads results into the Hageglede SQLite database, and exposes a CLI
+entry-point suitable for cron / scheduler invocation.
+"""
+
 import asyncio
 import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Ensure scripts/ is on the path so "import scripts.config" works when the CWD
-# is not the repository root (e.g. cron, systemd, Docker).
-repo_root = Path(__file__).resolve().parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+# Ensure scripts/ is on the path so imports work when the CWD is not the
+# repository root (e.g. cron, systemd, Docker).
+_repo_root = Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
 
 # ---------------------------------------------------------------------------
-# FIXED IMPORT (was: from config.settings import DATABASE_PATH, FROST_CONFIG)
-# ---------------------------------------------------------------------------
-# config.settings does not exist.  The single source of truth is
-# scripts/config.py which exposes module-level constants for backward
-# compatibility as well as the ConfigManager class.
+# FIXED IMPORT  –  replaces the broken:
+#     from config.settings import DATABASE_PATH, FROST_CONFIG
+# The package ``config.settings`` does not exist.  The single source of
+# configuration truth is ``scripts/config.py``, which exposes both the
+# ConfigManager class and module-level constants for backward compat.
 # ---------------------------------------------------------------------------
 from scripts.config import (
     DATABASE_PATH,
@@ -45,9 +48,13 @@ class DataPipeline:
         self.frost = FrostAPI(FROST_CONFIG)
         self.artsdb = ArtsdatabankenAPI()
         self.monitor = PipelineMonitor()
-        self.db_path = DATABASE_PATH
-        self.data_dir = DATA_DIR
+        self.db_path = Path(DATABASE_PATH)
+        self.data_dir = Path(DATA_DIR)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def run_cycle(self) -> dict:
         """Run a single collection / processing cycle.
@@ -59,25 +66,63 @@ class DataPipeline:
         results = {"weather": 0, "species": 0, "errors": []}
 
         try:
-            async with asyncio.TaskGroup() as tg:
-                weather_task = tg.create_task(self._collect_weather())
-                species_task = tg.create_task(self._collect_species())
+            # Concurrent data fetching -------------------------------
+            weather_items, species_items = await asyncio.gather(
+                self._collect_weather(),
+                self._collect_species(),
+            )
 
-            weather_items = weather_task.result()
-            species_items = species_task.result()
-
-            results["weather"] = await process_weather_batch(weather_items)
-            results["species"] = await process_species_batch(species_items)
+            # Sequential processing / persistence ----------------------
+            results["weather"] = await process_weather_batch(
+                weather_items, db_path=str(self.db_path)
+            )
+            results["species"] = await process_species_batch(
+                species_items, db_path=str(self.db_path)
+            )
 
             self.monitor.record_success(cycle_id, results)
-        except Exception as exc:
-            logger.exception("Pipeline cycle failed")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Pipeline cycle %s failed", cycle_id)
             results["errors"].append(str(exc))
             self.monitor.record_failure(cycle_id, exc)
         finally:
             self.monitor.end_cycle(cycle_id)
 
         return results
+
+    def health_check(self) -> dict:
+        """Quick diagnostic: can we reach the DB and both APIs?"""
+        checks = {
+            "db": False,
+            "frost": False,
+            "artsdatabanken": False,
+        }
+
+        # Database -------------------------------------------------
+        try:
+            session = get_db_session(str(self.db_path))
+            session.execute("SELECT 1")
+            session.close()
+            checks["db"] = True
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        # APIs -----------------------------------------------------
+        try:
+            checks["frost"] = self.frost.is_healthy()
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        try:
+            checks["artsdatabanken"] = self.artsdb.is_healthy()
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        return checks
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     async def _collect_weather(self):
         """Fetch recent MET Frost observations for the configured station."""
@@ -99,48 +144,25 @@ class DataPipeline:
             limit=50,
         )
 
-    def health_check(self) -> dict:
-        """Quick diagnostic: can we reach the DB and both APIs?"""
-        checks = {
-            "db": False,
-            "frost": False,
-            "artsdatabanken": False,
-        }
-        try:
-            session = get_db_session(self.db_path)
-            session.execute("SELECT 1")
-            session.close()
-            checks["db"] = True
-        except Exception:
-            pass
 
-        # Lightweight ping-style probes
-        try:
-            checks["frost"] = self.frost.is_healthy()
-        except Exception:
-            pass
+# ---------------------------------------------------------------------------
+# CLI entry-point
+# ---------------------------------------------------------------------------
 
-        try:
-            checks["artsdatabanken"] = self.artsdb.is_healthy()
-        except Exception:
-            pass
-
-        return checks
-
-
-def main():
-    """CLI entry-point."""
+def main() -> int:
+    """Run one pipeline cycle from the command line."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     )
+
     pipeline = DataPipeline()
     health = pipeline.health_check()
     logger.info("Health check: %s", health)
 
     if not all(health.values()):
         logger.error("One or more dependencies are unhealthy — aborting.")
-        sys.exit(1)
+        return 1
 
     results = asyncio.run(pipeline.run_cycle())
     logger.info("Pipeline cycle complete: %s", results)
@@ -148,10 +170,10 @@ def main():
     failed = results.get("errors", [])
     if failed:
         logger.error("Cycle finished with %d error(s): %s", len(failed), failed)
-        sys.exit(2)
+        return 2
 
-    sys.exit(0)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -19,19 +19,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-# ---------------------------------------------------------------------------
-# FIXED IMPORT  –  replaces the broken:
-#     from config.settings import DATABASE_PATH, FROST_CONFIG
-# The package ``config.settings`` does not exist.  The single source of
-# configuration truth is ``scripts/config.py``, which exposes both the
-# ConfigManager class and module-level constants for backward compat.
-# ---------------------------------------------------------------------------
-from scripts.config import (
-    DATABASE_PATH,
-    DATA_DIR,
-    FROST_CONFIG,
-)
-
+from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG
 from utils.api_clients import FrostAPI, ArtsdatabankenAPI
 from scripts.data_collection import collect_weather_data, collect_species_data
 from scripts.data_processing import process_weather_batch, process_species_batch
@@ -51,10 +39,6 @@ class DataPipeline:
         self.db_path = Path(DATABASE_PATH)
         self.data_dir = Path(DATA_DIR)
         self.data_dir.mkdir(parents=True, exist_ok=True)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     async def run_cycle(self) -> dict:
         """Run a single collection / processing cycle.
@@ -81,7 +65,7 @@ class DataPipeline:
             )
 
             self.monitor.record_success(cycle_id, results)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.exception("Pipeline cycle %s failed", cycle_id)
             results["errors"].append(str(exc))
             self.monitor.record_failure(cycle_id, exc)
@@ -98,31 +82,25 @@ class DataPipeline:
             "artsdatabanken": False,
         }
 
-        # Database -------------------------------------------------
         try:
             session = get_db_session(str(self.db_path))
             session.execute("SELECT 1")
             session.close()
             checks["db"] = True
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             pass
 
-        # APIs -----------------------------------------------------
         try:
             checks["frost"] = self.frost.is_healthy()
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             pass
 
         try:
             checks["artsdatabanken"] = self.artsdb.is_healthy()
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             pass
 
         return checks
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     async def _collect_weather(self):
         """Fetch recent MET Frost observations for the configured station."""
@@ -144,10 +122,6 @@ class DataPipeline:
             limit=50,
         )
 
-
-# ---------------------------------------------------------------------------
-# CLI entry-point
-# ---------------------------------------------------------------------------
 
 def main() -> int:
     """Run one pipeline cycle from the command line."""

@@ -1,5 +1,5 @@
-# PURPOSE: Orchestrate weather + plant data fetch → transform → SQLite load
-# CONSUMED BY: main entry point, CLI, scheduled jobs
+# PURPOSE: Orchestrates the ETL pipeline and must import configuration from the actual scripts.config module using correct symbol names.
+# CONSUMED BY: scripts/__main__.py, scheduled jobs, CLI entry points
 # DEPENDS ON: scripts.config, scripts.fetchers.met, scripts.fetchers.artsdbanken, scripts.transformers.climate, scripts.transformers.plants, scripts.loaders.weather_loader, scripts.loaders.plant_loader
 # TEST: none
 """

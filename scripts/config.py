@@ -360,3 +360,16 @@ MET_CLIENT_ID = os.getenv('MET_CLIENT_ID', '')
 
 # Directory paths
 CACHE_DIR = config.cache_dir
+
+# Additional backward-compatible exports for pipeline.py
+MET_API_CONFIG = {
+    "base_url": "https://frost.met.no",
+    "timeout": 30,
+    "client_id": MET_CLIENT_ID,
+}
+
+ARTSDB_API_CONFIG = {
+    "base_url": "https://api.artsdatabanken.no",
+    "timeout": 30,
+    "rate_limit": 1.0,
+}

@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Callable
 
-from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG
+from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG, MET_API_CONFIG, ARTSDB_API_CONFIG
 
 from fetchers.siv import (
     SIVClient, fetch_all_siv_data, process_siv_data
@@ -103,6 +103,8 @@ def run_pipeline(steps: List[str], force_refresh: bool = False,
     logger.info("Hageglede Pipeline started")
     logger.info(f"Database path: {DATABASE_PATH}")
     logger.info(f"Data directory: {DATA_DIR}")
+    logger.info(f"MET API config: {MET_API_CONFIG}")
+    logger.info(f"Artsdatabanken API config: {ARTSDB_API_CONFIG}")
     
     # Ensure database and paths exist
     os.makedirs(DATA_DIR, exist_ok=True)

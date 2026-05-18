@@ -360,3 +360,8 @@ MET_CLIENT_ID = os.getenv('MET_CLIENT_ID', '')
 
 # Directory paths
 CACHE_DIR = config.cache_dir
+
+# Backward-compatible aliases for pipeline.py and other consumers that expect
+# MET_API_CONFIG / ARTSDB_API_CONFIG from earlier import patterns.
+MET_API_CONFIG = FROST_CONFIG
+ARTSDB_API_CONFIG = GBIF_RETRY_CONFIG

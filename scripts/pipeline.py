@@ -1,7 +1,7 @@
 # PURPOSE: Main entry point for the Hageglede data pipeline; orchestrates fetching, processing, and loading.
 # CONSUMED BY: none (entry point)
-# DEPENDS ON: scripts.config, fetchers.siv, fetchers.wikidata, db.db_ops, db.utils
-# TEST: none
+# DEPENDS ON: scripts.config
+# TEST: tests/test_bug_config_import.py
 
 """
 Main entry point for the Hageglede data pipeline.
@@ -13,29 +13,20 @@ import time
 import argparse
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Callable
+from typing import Dict, Any, Callable
 
 from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG
-
-from fetchers.siv import (
-    SIVClient, fetch_all_siv_data, process_siv_data
-)
-from fetchers.wikidata import (
-    WikidataFetcher, search_wikidata_entities, fetch_entity_data, extract_taxon_info
-)
-from db.db_ops import DatabaseManager
-from db.utils import get_connection, close_connection, execute_query
 
 
 def setup_logging(log_level: str = "INFO") -> None:
     """Configure logging for the pipeline."""
     # Add colored output for terminal
     import logging
-    
+
     # Create a custom formatter with colors
     class ColoredFormatter(logging.Formatter):
         """Custom formatter with colors for terminal output."""
-        
+
         COLORS = {
             'DEBUG': '\033[36m',    # Cyan
             'INFO': '\033[32m',     # Green
@@ -44,22 +35,22 @@ def setup_logging(log_level: str = "INFO") -> None:
             'CRITICAL': '\033[35m' # Magenta
         }
         RESET = '\033[0m'
-        
+
         def format(self, record):
             # Only use colors if outputting to a terminal
             if sys.stdout.isatty():
                 level_color = self.COLORS.get(record.levelname, '')
                 record.levelname = f"{level_color}{record.levelname}{self.RESET}"
             return super().format(record)
-    
+
     formatter = ColoredFormatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
-    
+
     # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
@@ -71,7 +62,7 @@ def run_step(step_func: Callable, step_name: str) -> None:
     """Helper to run a pipeline step with timing and error handling."""
     logger = logging.getLogger(__name__)
     logger.info(f"Starting step: {step_name}")
-    
+
     start_time = time.time()
     try:
         result = step_func()
@@ -84,26 +75,26 @@ def run_step(step_func: Callable, step_name: str) -> None:
         raise
 
 
-def run_pipeline(steps: List[str], force_refresh: bool = False, 
+def run_pipeline(steps: list, force_refresh: bool = False,
                  skip_fetch: bool = False) -> Dict[str, Any]:
     """
     Run the full data pipeline.
-    
+
     Args:
         steps: List of pipeline steps to run (e.g., ['fetch', 'process', 'load'])
         force_refresh: If True, bypass any data caching and re-fetch everything
         skip_fetch: If True, skip fetching fresh data and use cached/processed data
-        
+
     Returns:
         Dictionary containing the status of each step and summary metrics
     """
     setup_logging()
     logger = logging.getLogger(__name__)
-    
+
     logger.info("Hageglede Pipeline started")
     logger.info(f"Database path: {DATABASE_PATH}")
     logger.info(f"Data directory: {DATA_DIR}")
-    
+
     # Ensure database and paths exist
     os.makedirs(DATA_DIR, exist_ok=True)
     db_path = Path(DATABASE_PATH)
@@ -111,11 +102,11 @@ def run_pipeline(steps: List[str], force_refresh: bool = False,
         logger.info("Creating new database")
         # Initialize database schema
         init_db()
-    
+
     # Ensure subdirectories exist for caching
     cache_dir = Path(DATA_DIR) / "cache"
     cache_dir.mkdir(exist_ok=True)
-    
+
     results = {
         'steps_completed': [],
         'steps_failed': [],
@@ -123,87 +114,92 @@ def run_pipeline(steps: List[str], force_refresh: bool = False,
         'total_time': 0,
         'records_processed': 0
     }
-    
+
     steps = [step.lower() for step in steps]
     all_steps = ['fetch', 'process', 'load', 'validate']
-    
+
     # If 'all' is requested, run everything
     if 'all' in steps:
         steps = all_steps
-    
+
     start_time = time.time()
-    
+
     try:
         # Step: Initialize database if needed
         if any(step in all_steps for step in steps):
             run_step(init_db, "Initialize database")
             results['steps_completed'].append('init')
-        
+
         # Step: Fetch data from sources
         if 'fetch' in steps and not skip_fetch:
             if force_refresh:
                 logger.info("Force refresh enabled - will clear caches")
                 clear_all_caches()
-            
+
             # Fetch plant data
             run_step(fetch_plant_data, "Fetch plant data")
-            
+
             # Fetch weather data
             run_step(fetch_weather_data, "Fetch weather data")
-            
+
             results['steps_completed'].append('fetch')
-        
+
         # Step: Process and clean data
         if 'process' in steps:
             pass  # Processing done inline during fetch
-        
+
         # Step: Load data into database
         if 'load' in steps:
             run_step(load_all_data, "Load all data")
             results['steps_completed'].append('load')
-        
+
         # Step: Validate data
         if 'validate' in steps:
             run_step(validate_pipeline, "Validate pipeline data")
             results['steps_completed'].append('validate')
-        
+
     except Exception as e:
         logger.error(f"Pipeline error: {e}", exc_info=True)
         results['errors'].append(str(e))
         results['steps_failed'].append('pipeline')
         raise
-    
+
     finally:
         # Always close database connections
+        from db.utils import close_connection
         close_connection()
-        
+
         elapsed = time.time() - start_time
         results['total_time'] = elapsed
-        
+
         if results['steps_failed']:
             logger.warning(f"Pipeline completed with {len(results['steps_failed'])} failed steps in {elapsed:.2f}s")
         else:
             logger.info(f"Pipeline completed successfully in {elapsed:.2f}s")
-        
+
         return results
 
 
 def init_db() -> None:
     """Initialize database schema and ensure tables exist."""
+    from db.db_ops import DatabaseManager
     db = DatabaseManager()
     db.init_db()
 
 
 def fetch_plant_data() -> Dict[str, Any]:
     """Fetch plant data from all configured sources."""
+    from fetchers.siv import SIVClient, process_siv_data
+    from fetchers.wikidata import WikidataFetcher
+
     results = {
         'siv': {},
         'wikidata': {},
         'errors': []
     }
-    
+
     logger = logging.getLogger(__name__)
-    
+
     # Fetch from SIV
     try:
         siv_client = SIVClient()
@@ -212,7 +208,7 @@ def fetch_plant_data() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error fetching SIV data: {e}")
         results['errors'].append(('siv', str(e)))
-    
+
     # Fetch from Wikidata
     try:
         wikidata_fetcher = WikidataFetcher()
@@ -222,55 +218,55 @@ def fetch_plant_data() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error fetching Wikidata: {e}")
         results['errors'].append(('wikidata', str(e)))
-    
+
     return results
 
 
 def fetch_weather_data() -> Dict[str, Any]:
     """Fetch weather data from MET API."""
     logger = logging.getLogger(__name__)
-    
+
     from fetchers.met import FrostClient, fetch_weather_observations
-    
+
     results = {
         'observations': [],
         'errors': []
     }
-    
+
     try:
         # Initialize Frost client with config
         client = FrostClient()
-        
+
         # Fetch observations for Norway
         observations = fetch_weather_observations(client, source_id="SN18700")
         results['observations'] = observations
-        
+
     except Exception as e:
         logger.error(f"Error fetching weather data: {e}")
         results['errors'].append(('met', str(e)))
-    
+
     return results
 
 
 def load_all_data() -> Dict[str, Any]:
     """Load all fetched data into the database."""
     logger = logging.getLogger(__name__)
-    
+
     # Load plant data (placeholder - actual implementation depends on data structure)
     logger.info("Loading plant data")
     # TODO: Implement data loading based on actual data structures
-    
+
     return {}
 
 
 def validate_pipeline() -> bool:
     """Validate pipeline data integrity."""
     logger = logging.getLogger(__name__)
-    
+
     # Check for required tables
     # Check for data freshness
     # Validate relationships between data sources
-    
+
     logger.info("Pipeline validation completed")
     return True
 
@@ -311,22 +307,22 @@ def main():
         action='store_true',
         help='Skip fetching and use cached data only'
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         results = run_pipeline(
             steps=args.steps,
             force_refresh=args.force_refresh,
             skip_fetch=args.skip_fetch
         )
-        
+
         if results['steps_failed']:
             print(f"\nPipeline completed with errors in {results['total_time']:.2f}s")
             sys.exit(1)
         else:
             print(f"\nPipeline completed successfully in {results['total_time']:.2f}s")
-            
+
     except Exception as e:
         print(f"\nPipeline failed: {e}", file=sys.stderr)
         sys.exit(1)

@@ -11,7 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+try:
+    REPO_ROOT = Path(__file__).resolve().parent.parent
+except NameError:
+    REPO_ROOT = Path.cwd()
 
 
 def test_pipeline_help_runs_without_import_error():
@@ -28,7 +31,7 @@ def test_pipeline_help_runs_without_import_error():
     )
     combined = (result.stdout + result.stderr).lower()
     assert 'usage' in combined, (
-        f"Expected 'usage' in output:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        f"Expected 'usage' in output:\nSTDOUT: {result.stdout}\nSTDOUT: {result.stderr}"
     )
 
 

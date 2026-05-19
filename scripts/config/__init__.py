@@ -9,23 +9,28 @@ Configuration module for ETL pipeline settings.
 
 __all__ = ['config', 'DATA_DIR', 'DATABASE_PATH', 'FROST_CONFIG']
 
-# Try direct import first, then fallback to module-level import
-try:
-    from .config import config, DATA_DIR
-except ImportError:
-    # Fallback for backward compatibility
-    import sys
-    import os
-    current_dir = os.path.dirname(__file__)
-    parent_dir = os.path.dirname(current_dir)
-    sys.path.insert(0, parent_dir)
-    from config import config, DATA_DIR
+# Import config and DATA_DIR from the submodule scripts/config/config.py.
+# This is a normal relative import — config.py lives inside this package.
+from .config import config, DATA_DIR
 
-# Import DATABASE_PATH and FROST_CONFIG from the standalone scripts/config.py
-# (these names are not in the package submodule scripts/config/config.py)
-import sys
+# Import DATABASE_PATH and FROST_CONFIG from the sibling file module
+# scripts/config.py.  We cannot use a normal `import config` or
+# `from ..config import ...` here because both `scripts/config.py` (file
+# module) and `scripts/config/` (this package) share the name `config`,
+# and Python always resolves a plain `config` to this package itself,
+# creating a circular import.  Using importlib lets us load the file
+# module under a distinct internal name, sidestepping the collision.
+import importlib.util
 import os
-_cfg_parent = os.path.dirname(os.path.dirname(__file__))
-if _cfg_parent not in sys.path:
-    sys.path.insert(0, _cfg_parent)
-from config import DATABASE_PATH, FROST_CONFIG
+
+_SIBLING_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), 'config.py'
+)
+_spec = importlib.util.spec_from_file_location(
+    '_scripts_config_file_module', _SIBLING_PATH
+)
+_sibling = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_sibling)
+
+DATABASE_PATH = _sibling.DATABASE_PATH
+FROST_CONFIG = _sibling.FROST_CONFIG

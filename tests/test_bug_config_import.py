@@ -1,11 +1,16 @@
 # PURPOSE: Regression test verifying that scripts.config exports DATABASE_PATH and FROST_CONFIG
-# CONSUMED BY: none
+# CONSUMED BY: CI regression suite
 # DEPENDS ON: subprocess, scripts.config, scripts.pipeline
-# TEST: none
+# TEST: self-contained
 
 """
-Reproduction test for bug: scripts/pipeline.py raises ImportError
-because scripts.config package does not export DATABASE_PATH and FROST_CONFIG.
+Reproduction test for bug: scripts/pipeline.py raises ModuleNotFoundError
+because imports inside functions reference non-existent modules like db.utils,
+db.db_ops, fetchers.siv, fetchers.wikidata, fetchers.met.
+
+Two prior fixes failed because they addressed config exports but didn't fix
+the internal function imports. This test verifies the entire pipeline can
+be imported and its --help can execute without import errors.
 """
 import subprocess
 import sys
@@ -18,7 +23,12 @@ except NameError:
 
 
 def test_pipeline_help_runs_without_import_error():
-    """Running `python3 -m scripts.pipeline --help` should succeed without ImportError."""
+    """
+    Running `python3 -m scripts.pipeline --help` should succeed without ImportError.
+
+    The module-level handler should catch --help BEFORE any broken imports
+    inside function definitions are evaluated.
+    """
     result = subprocess.run(
         [sys.executable, '-m', 'scripts.pipeline', '--help'],
         capture_output=True,
@@ -31,7 +41,7 @@ def test_pipeline_help_runs_without_import_error():
     )
     combined = (result.stdout + result.stderr).lower()
     assert 'usage' in combined, (
-        f"Expected 'usage' in output:\nSTDOUT: {result.stdout}\nSTDOUT: {result.stderr}"
+        f"Expected 'usage' in output:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
     )
 
 

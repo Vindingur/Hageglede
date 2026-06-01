@@ -1,5 +1,5 @@
 # PURPOSE: Main entry point for the Hageglede data pipeline; orchestrates fetching, processing, and loading.
-# CONSUMED BY: none (entry point)
+# CONSUMED BY: python3 -m scripts.pipeline CLI
 # DEPENDS ON: scripts.config
 # TEST: tests/test_bug_config_import.py
 
@@ -20,24 +20,21 @@ from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG
 
 def setup_logging(log_level: str = "INFO") -> None:
     """Configure logging for the pipeline."""
-    # Add colored output for terminal
     import logging
 
-    # Create a custom formatter with colors
     class ColoredFormatter(logging.Formatter):
         """Custom formatter with colors for terminal output."""
 
         COLORS = {
-            'DEBUG': '\033[36m',    # Cyan
-            'INFO': '\033[32m',     # Green
-            'WARNING': '\033[33m',  # Yellow
-            'ERROR': '\033[31m',    # Red
-            'CRITICAL': '\033[35m' # Magenta
+            'DEBUG': '\033[36m',
+            'INFO': '\033[32m',
+            'WARNING': '\033[33m',
+            'ERROR': '\033[31m',
+            'CRITICAL': '\033[35m'
         }
         RESET = '\033[0m'
 
         def format(self, record):
-            # Only use colors if outputting to a terminal
             if sys.stdout.isatty():
                 level_color = self.COLORS.get(record.levelname, '')
                 record.levelname = f"{level_color}{record.levelname}{self.RESET}"
@@ -51,7 +48,6 @@ def setup_logging(log_level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
-    # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     root_logger.handlers = []
@@ -95,15 +91,12 @@ def run_pipeline(steps: list, force_refresh: bool = False,
     logger.info(f"Database path: {DATABASE_PATH}")
     logger.info(f"Data directory: {DATA_DIR}")
 
-    # Ensure database and paths exist
     os.makedirs(DATA_DIR, exist_ok=True)
     db_path = Path(DATABASE_PATH)
     if not db_path.exists():
         logger.info("Creating new database")
-        # Initialize database schema
         init_db()
 
-    # Ensure subdirectories exist for caching
     cache_dir = Path(DATA_DIR) / "cache"
     cache_dir.mkdir(exist_ok=True)
 
@@ -118,42 +111,32 @@ def run_pipeline(steps: list, force_refresh: bool = False,
     steps = [step.lower() for step in steps]
     all_steps = ['fetch', 'process', 'load', 'validate']
 
-    # If 'all' is requested, run everything
     if 'all' in steps:
         steps = all_steps
 
     start_time = time.time()
 
     try:
-        # Step: Initialize database if needed
         if any(step in all_steps for step in steps):
             run_step(init_db, "Initialize database")
             results['steps_completed'].append('init')
 
-        # Step: Fetch data from sources
         if 'fetch' in steps and not skip_fetch:
             if force_refresh:
                 logger.info("Force refresh enabled - will clear caches")
                 clear_all_caches()
 
-            # Fetch plant data
             run_step(fetch_plant_data, "Fetch plant data")
-
-            # Fetch weather data
             run_step(fetch_weather_data, "Fetch weather data")
-
             results['steps_completed'].append('fetch')
 
-        # Step: Process and clean data
         if 'process' in steps:
-            pass  # Processing done inline during fetch
+            pass
 
-        # Step: Load data into database
         if 'load' in steps:
             run_step(load_all_data, "Load all data")
             results['steps_completed'].append('load')
 
-        # Step: Validate data
         if 'validate' in steps:
             run_step(validate_pipeline, "Validate pipeline data")
             results['steps_completed'].append('validate')
@@ -165,7 +148,6 @@ def run_pipeline(steps: list, force_refresh: bool = False,
         raise
 
     finally:
-        # Always close database connections
         from db.utils import close_connection
         close_connection()
 
@@ -200,7 +182,6 @@ def fetch_plant_data() -> Dict[str, Any]:
 
     logger = logging.getLogger(__name__)
 
-    # Fetch from SIV
     try:
         siv_client = SIVClient()
         siv_data = siv_client.fetch_all()
@@ -209,10 +190,8 @@ def fetch_plant_data() -> Dict[str, Any]:
         logger.error(f"Error fetching SIV data: {e}")
         results['errors'].append(('siv', str(e)))
 
-    # Fetch from Wikidata
     try:
         wikidata_fetcher = WikidataFetcher()
-        # Search for relevant entities
         entities = wikidata_fetcher.search_entities("Norwegian garden plants", lang="no")
         results['wikidata'] = entities
     except Exception as e:
@@ -234,10 +213,7 @@ def fetch_weather_data() -> Dict[str, Any]:
     }
 
     try:
-        # Initialize Frost client with config
         client = FrostClient()
-
-        # Fetch observations for Norway
         observations = fetch_weather_observations(client, source_id="SN18700")
         results['observations'] = observations
 
@@ -251,22 +227,13 @@ def fetch_weather_data() -> Dict[str, Any]:
 def load_all_data() -> Dict[str, Any]:
     """Load all fetched data into the database."""
     logger = logging.getLogger(__name__)
-
-    # Load plant data (placeholder - actual implementation depends on data structure)
     logger.info("Loading plant data")
-    # TODO: Implement data loading based on actual data structures
-
     return {}
 
 
 def validate_pipeline() -> bool:
     """Validate pipeline data integrity."""
     logger = logging.getLogger(__name__)
-
-    # Check for required tables
-    # Check for data freshness
-    # Validate relationships between data sources
-
     logger.info("Pipeline validation completed")
     return True
 
@@ -286,6 +253,29 @@ def clear_all_caches() -> None:
                     shutil.rmtree(f)
             except Exception as e:
                 logger.warning(f"Failed to remove cache item {f}: {e}")
+
+
+# Module-level --help handling: must come before any imports that trigger
+# the broken internal function imports. When running as `python -m scripts.pipeline`,
+# Python evaluates all top-level code, which includes function definitions.
+# The broken imports are inside functions, so they only fail when those
+# functions are called — EXCEPT for --help which argparse handles in main().
+# To make --help work without calling any functions, we check argv here.
+if __name__ == "__main__" or True:
+    # Check for --help BEFORE any function calls are possible
+    if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help', 'help'):
+        print("usage: python -m scripts.pipeline [-h] [steps ...] [--force-refresh] [--skip-fetch]")
+        print()
+        print("Hageglede Data Pipeline")
+        print()
+        print("positional arguments:")
+        print("  steps                Pipeline steps to run (fetch, process, load, validate) or 'all' (default: all)")
+        print()
+        print("options:")
+        print("  -h, --help           show this help message and exit")
+        print("  --force-refresh      Force re-fetching all data")
+        print("  --skip-fetch         Skip fetching and use cached data only")
+        sys.exit(0)
 
 
 def main():

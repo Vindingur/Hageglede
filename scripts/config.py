@@ -1,7 +1,7 @@
 # PURPOSE: Configuration management for the Hageglede data pipeline with sensible defaults
-# CONSUMED BY: scripts/pipeline.py, fetchers/plant_fetcher.py, loaders/weather_loader.py, loaders/plant_loader.py
-# DEPENDS ON: none
-# TEST: none
+# CONSUMED BY: scripts/pipeline.py, scripts/fetchers/plant_fetcher.py, scripts/loaders/weather_loader.py, scripts/loaders/plant_loader.py
+# DEPENDS ON: none (yaml, dotenv are optional)
+# TEST: tests/test_bug_config_import.py
 
 """
 Configuration management for the Hageglede data pipeline.
@@ -14,8 +14,20 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
 
-import yaml
-import dotenv
+# Optional dependencies - provide graceful degradation
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    yaml = None
+    YAML_AVAILABLE = False
+
+try:
+    import dotenv
+    DOTENV_AVAILABLE = True
+except ImportError:
+    dotenv = None
+    DOTENV_AVAILABLE = False
 
 
 class SourceType(Enum):
@@ -104,8 +116,9 @@ class ConfigManager:
         
     def load(self) -> PipelineConfig:
         """Load configuration from file or environment."""
-        # Load environment variables
-        dotenv.load_dotenv()
+        # Load environment variables if dotenv is available
+        if DOTENV_AVAILABLE:
+            dotenv.load_dotenv()
         
         # Try to load from config file if specified
         if self.config_path and Path(self.config_path).exists():
@@ -129,6 +142,9 @@ class ConfigManager:
     
     def _load_from_file(self, path: str):
         """Load configuration from YAML or JSON file."""
+        if not YAML_AVAILABLE:
+            raise ImportError("pyyaml is required to load YAML config files. Install with: pip install pyyaml")
+        
         path_obj = Path(path)
         
         if path_obj.suffix in ['.yaml', '.yml']:
@@ -267,6 +283,8 @@ class ConfigManager:
         path_obj = Path(path)
         
         if path_obj.suffix in ['.yaml', '.yml']:
+            if not YAML_AVAILABLE:
+                raise ImportError("pyyaml is required to save YAML config files. Install with: pip install pyyaml")
             with open(path_obj, 'w', encoding='utf-8') as f:
                 yaml.dump(data, f, default_flow_style=False)
         elif path_obj.suffix == '.json':

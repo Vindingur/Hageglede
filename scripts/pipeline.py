@@ -1,7 +1,7 @@
 # PURPOSE: Main entry point for the Hageglede data pipeline; orchestrates fetching, processing, and loading.
 # CONSUMED BY: python3 -m scripts.pipeline CLI
-# DEPENDS ON: scripts.config
-# TEST: tests/test_bug_config_import.py
+# DEPENDS ON: scripts.config, db.db_ops (DatabaseManager), db.utils (close_connection)
+# TEST: tests/test_bug_pipeline_db_import.py
 
 """
 Main entry point for the Hageglede data pipeline.

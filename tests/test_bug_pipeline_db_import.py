@@ -1,65 +1,69 @@
-# PURPOSE: Reproduction test for the blocking "No module named 'db'" import error
-#          when running `python3 -m scripts.pipeline` from the project root.
-# CONSUMED BY: CI verification on bugfix branch
-# DEPENDS ON: db.db_ops, db.utils
-# TEST: none (this is itself a test)
+# PURPOSE: Reproduction test that verifies db.db_ops.DatabaseManager and
+#          db.utils.close_connection are importable via their submodule paths.
+# CONSUMED BY: CI verification (fix_bug workflow)
+# DEPENDS ON: db/db_ops.py, db/utils.py, db/__init__.py
+# TEST: none (self — this is the reproduction)
 
-"""
-Reproduction: verify that the db package at the project root can be imported
-and that its DatabaseManager and close_connection are usable.
-"""
+"""Verify that db.db_ops and db.utils exist and export the expected symbols."""
+
+import importlib
+import inspect
 import sys
-import os
-import subprocess
 
 
-def test_db_package_is_importable():
-    """The db package must be importable from the project root."""
-    result = subprocess.run(
-        [sys.executable, "-c", "import db"],
-        capture_output=True, text=True,
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def test_can_import_database_manager_from_db_ops():
+    """`from db.db_ops import DatabaseManager` must succeed."""
+    db_ops = importlib.import_module("db.db_ops")
+    assert hasattr(db_ops, "DatabaseManager"), (
+        "db.db_ops does not export DatabaseManager"
     )
-    assert result.returncode == 0, (
-        f"import db failed with stderr: {result.stderr}"
+    assert inspect.isclass(db_ops.DatabaseManager), (
+        "db.db_ops.DatabaseManager should be a class"
     )
 
 
-def test_db_db_ops_imports_database_manager():
-    """from db.db_ops import DatabaseManager must succeed."""
-    import db.db_ops
-    assert hasattr(db.db_ops, "DatabaseManager"), (
-        "db.db_ops is missing DatabaseManager"
+def test_can_import_close_connection_from_db_utils():
+    """`from db.utils import close_connection` must succeed."""
+    db_utils = importlib.import_module("db.utils")
+    assert hasattr(db_utils, "close_connection"), (
+        "db.utils does not export close_connection"
+    )
+    assert callable(db_utils.close_connection), (
+        "db.utils.close_connection should be callable"
     )
 
 
-def test_db_utils_imports_close_connection():
-    """from db.utils import close_connection must succeed."""
-    import db.utils
-    assert hasattr(db.utils, "close_connection"), (
-        "db.utils is missing close_connection"
-    )
+def test_backward_compat_from_db_package():
+    """`from db import DatabaseManager, close_connection` must still work."""
+    import db
+    assert hasattr(db, "DatabaseManager"), "db.DatabaseManager missing"
+    assert hasattr(db, "close_connection"), "db.close_connection missing"
+    assert inspect.isclass(db.DatabaseManager)
+    assert callable(db.close_connection)
 
 
-def test_database_manager_init_db_does_not_crash():
-    """DatabaseManager().init_db() must not raise an exception."""
+def test_database_manager_init_db_works(tmp_path):
+    """DatabaseManager().init_db() should create a SQLite database file."""
     from db.db_ops import DatabaseManager
-    mgr = DatabaseManager()
-    # init_db should be callable even if the underlying db path is bogus;
-    # the triage says the real code is init_sqlite from src.hageglede.db.session
-    try:
-        mgr.init_db()
-    except Exception as e:
-        # The real init_sqlite may fail on a bad path — that's fine,
-        # the point is the import and attribute access must work.
-        assert "No module named" not in str(e), (
-            f"DatabaseManager.init_db raised an import error: {e}"
-        )
+
+    db_file = tmp_path / "test_hageglede.db"
+    mgr = DatabaseManager(db_path=str(db_file))
+    mgr.init_db()
+
+    assert db_file.exists(), f"Database file {db_file} was not created"
+    assert db_file.stat().st_size > 0, "Database file is empty"
+
+
+def test_close_connection_is_noop():
+    """close_connection() is a no-op that does not raise."""
+    from db.utils import close_connection
+
+    # Should not raise under any circumstances
+    close_connection()
+    close_connection()
+    close_connection()
 
 
 if __name__ == "__main__":
-    test_db_package_is_importable()
-    test_db_db_ops_imports_database_manager()
-    test_db_utils_imports_close_connection()
-    test_database_manager_init_db_does_not_crash()
-    print("All reproduction tests passed.")
+    import pytest
+    sys.exit(pytest.main([__file__, "-v"]))

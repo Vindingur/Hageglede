@@ -1,7 +1,7 @@
-# PURPOSE: Helper functions for the db package — close_connection and any
-#          path resolution utilities used by pipeline consumers.
+# PURPOSE: Provides the close_connection function at the db.utils submodule path
+#          that pipeline.py's run_pipeline() finally block imports.
 # CONSUMED BY: scripts/pipeline.py (run_pipeline finally via from db.utils import close_connection),
-#               tests/test_bug_pipeline_db_import.py (from db.utils import close_connection)
+#              tests/test_bug_pipeline_db_import.py (from db.utils import close_connection)
 # DEPENDS ON: none
 # TEST: tests/test_bug_pipeline_db_import.py
 

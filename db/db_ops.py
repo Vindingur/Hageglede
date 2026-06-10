@@ -2,22 +2,17 @@
 #          that pipeline.py's init_db() function imports.
 # CONSUMED BY: scripts/pipeline.py (init_db via from db.db_ops import DatabaseManager),
 #              tests/test_bug_pipeline_db_import.py (from db.db_ops import DatabaseManager)
-# DEPENDS ON: src.hageglede.db.session (init_sqlite), db/__init__.py (sys.path setup runs first)
+# DEPENDS ON: src.hageglede.db.session (init_sqlite), db/__init__.py (sys.path setup)
 # TEST: tests/test_bug_pipeline_db_import.py
 
-"""DatabaseManager — thin adapter around init_sqlite for pipeline.py."""
+"""Database operations — DatabaseManager wrapper around init_sqlite."""
 
 import os
 import sys
 
-# ---------------------------------------------------------------------------
-# Ensure the project root is on sys.path so that ``src.hageglede.db``
-# can be imported from the project root even when ``PYTHONPATH`` is unset.
-# This mirrors the setup in db/__init__.py so the submodule is importable
-# even when db.db_ops is imported first (before db.__init__ runs its
-# own sys.path fixup).
-# ---------------------------------------------------------------------------
-_project_root = os.path.dirname(os.path.abspath(__file__))
+# Use the same sys.path setup that db/__init__.py performs so that
+# src/hageglede.db.* imports resolve correctly from the project root.
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _src = os.path.join(_project_root, "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)

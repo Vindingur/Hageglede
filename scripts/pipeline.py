@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Callable
 
-from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG
+from scripts.config import DATABASE_PATH, DATA_DIR, FROST_CONFIG, MET_API_CONFIG, ARTSDB_API_CONFIG
 
 
 def setup_logging(log_level: str = "INFO") -> None:
